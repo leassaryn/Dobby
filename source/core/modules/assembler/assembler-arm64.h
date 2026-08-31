@@ -473,6 +473,14 @@ public:
     LoadStore(OP_X(LDR), rt, src);
   }
 
+  void ldrsw(const Register &rt, const MemOperand &src) {
+    LoadStore(OP(LDRSW), rt, src);
+  }
+
+  void prfm(const MemOperand &src) {
+    LoadStore(OP(PRFM), X(31), src);
+  }
+
   void str(const CPURegister &rt, const MemOperand &src) {
     LoadStore(OP_X(STR), rt, src);
   }
@@ -539,8 +547,9 @@ private:
     int64_t imm12 = addr.offset();
     if (addr.IsImmediateOffset()) {
       // TODO: check Scaled ???
-      imm12 = addr.offset() >> OpEncode::scale(LoadStoreUnsignedOffsetFixed | op);
-      Emit(LoadStoreUnsignedOffsetFixed | op | LeftShift(imm12, 12, 10) | Rn(addr.base()) | Rt(rt));
+      // Cast enums to int: OR-ing distinct enumeration types is deprecated in C++23.
+      imm12 = addr.offset() >> OpEncode::scale(static_cast<int>(LoadStoreUnsignedOffsetFixed) | op);
+      Emit(static_cast<int>(LoadStoreUnsignedOffsetFixed) | op | LeftShift(imm12, 12, 10) | Rn(addr.base()) | Rt(rt));
     } else if (addr.IsRegisterOffset()) {
       UNREACHABLE();
     } else {
@@ -598,7 +607,7 @@ private:
   }
   void LogicalShift(const Register &rd, const Register &rn, const Operand &operand, LogicalOp op) {
     int32_t combine_fields_op = OpEncode::EncodeLogicalShift(rd, rn, operand);
-    Emit(op | LogicalShiftedFixed | combine_fields_op);
+    Emit(static_cast<int>(op) | LogicalShiftedFixed | combine_fields_op);
   }
 };
 

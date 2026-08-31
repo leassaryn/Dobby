@@ -5,6 +5,7 @@
 
 #include "dobby_internal.h"
 #include "Interceptor.h"
+#include "InterceptRouting/InterceptRouting.h"
 
 #if defined(__linux__) || defined(__APPLE__)
 __attribute__((constructor)) static void ctor() {
@@ -20,6 +21,14 @@ PUBLIC const char *DobbyBuildVersion() {
   return __DOBBY_BUILD_VERSION__;
 }
 
+PUBLIC int DobbyEnumerateHooks(dobby_hook_iterator_t cb, void *userdata) {
+  if (cb == NULL)
+    return RS_FAILED;
+
+  Interceptor::SharedInstance()->Iterate(cb, userdata);
+  return RS_SUCCESS;
+}
+
 PUBLIC int DobbyDestroy(void *address) {
   // check if we already hook
   HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
@@ -32,7 +41,19 @@ PUBLIC int DobbyDestroy(void *address) {
 #endif
       CodePatch(address, buffer, buffer_size);
     }
+
+    // release routing resources (origin/relocated/trampoline buffers)
+    if (entry->route) {
+      InterceptRouting *route = (InterceptRouting *)entry->route;
+      route->Destroy();
+      delete route;
+      entry->route = NULL;
+    }
+
     Interceptor::SharedInstance()->RemoveHookEntry(address);
+
+    // release hook entry itself
+    delete entry;
     return RT_SUCCESS;
   }
 

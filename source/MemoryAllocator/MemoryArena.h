@@ -47,8 +47,15 @@ public:
 
   static void Destroy(MemoryChunk *chunk);
 
+  // Serialize concurrent allocations on the shared page pool.
+  static void Lock();
+
+  static void Unlock();
+
 public:
   static LiteMutableArray *page_chunks;
+
+  static void *lock_;
 };
 
 #endif

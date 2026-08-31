@@ -22,16 +22,27 @@ PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
   // check if already hooked
   HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
   if (entry) {
+    // reject conflicts: this address is already hooked with a different mechanism
+    if (entry->type != kFunctionInlineHook) {
+      ERROR_LOG("address %p is already instrumented; destroy it before hooking", address);
+      return RS_FAILED;
+    }
     FunctionInlineReplaceRouting *route = (FunctionInlineReplaceRouting *)entry->route;
     if (route->GetTrampolineTarget() == replace_call) {
-      ERROR_LOG("function %p already been hooked.", address);
-      return RS_FAILED;
+      // idempotent: already hooked with the same replacement; succeed as a no-op
+      if (origin_call)
+        *origin_call = entry->relocated_origin_function;
+      return RS_SUCCESS;
     }
   }
 
   // check if was previously hooked and rehook if needed
   entry = Interceptor::SharedInstanceOriginal()->FindHookEntry(address);
   if (entry) {
+    if (entry->type != kFunctionInlineHook) {
+      ERROR_LOG("address %p is already instrumented; destroy it before hooking", address);
+      return RS_FAILED;
+    }
     FunctionInlineReplaceRouting *route = (FunctionInlineReplaceRouting *)entry->route;
     if (route->GetTrampolineTarget() != replace_call) {
       // no need to regenerate relocated buffer because its size and contents are the same
@@ -39,7 +50,8 @@ PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
       route->SetReplaceCall(replace_call);
     }
     Interceptor::SharedInstance()->AddHookEntry(entry);
-    *origin_call = entry->relocated_origin_function;
+    if (origin_call)
+      *origin_call = entry->relocated_origin_function;
     return RS_SUCCESS;
   }
 
@@ -51,10 +63,21 @@ PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
   FunctionInlineReplaceRouting *route = new FunctionInlineReplaceRouting(entry, replace_call);
   route->Prepare();
   route->DispatchRouting();
+
+  // abort if relocation/trampoline generation failed
+  if (!route->IsReady()) {
+    ERROR_LOG("failed to prepare hook for %p", address);
+    route->Destroy();
+    delete route;
+    delete entry;
+    return RS_FAILED;
+  }
+
   Interceptor::SharedInstance()->AddHookEntry(entry);
 
   // set origin call with relocated function
-  *origin_call = entry->relocated_origin_function;
+  if (origin_call)
+    *origin_call = entry->relocated_origin_function;
 
   return RS_SUCCESS;
 }
@@ -67,10 +90,14 @@ PUBLIC int DobbyCommit(void *address) {
 
   // check if already hooked
   HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
+  if (!entry || !entry->route || entry->type != kFunctionInlineHook) {
+    ERROR_LOG("function %p is not prepared/hooked.", address);
+    return RS_FAILED;
+  }
   FunctionInlineReplaceRouting *route = (FunctionInlineReplaceRouting *)entry->route;
   if (entry->is_committed) {
-    ERROR_LOG("function %p already been hooked.", address);
-    return RS_FAILED;
+    // idempotent: already committed; succeed as a no-op
+    return RS_SUCCESS;
   }
 
   // code patch & hijack original control flow entry

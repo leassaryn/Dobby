@@ -5,6 +5,8 @@
 
 #include "dobby_internal.h"
 
+#include <map>
+
 #include "core/arch/arm64/registers-arm64.h"
 #include "core/modules/assembler/assembler-arm64.h"
 #include "core/modules/codegen/codegen-arm64.h"
@@ -128,6 +130,22 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
   uint64_t curr_orig_pc = origin->raw_instruction_start();
   uint64_t curr_relo_pc = relocated->raw_instruction_start();
 
+  // Maps each original instruction address to the address of its relocated copy.
+  // Used to redirect branches whose target lands inside the patched prologue so
+  // they reach the relocated instructions instead of the patched trampoline.
+  uint64_t origin_start = origin->raw_instruction_start();
+  uint64_t origin_end = origin_start + origin->raw_instruction_size();
+  std::map<addr_t, addr_t> origin_to_relo;
+
+  auto ResolveBranchTarget = [&](addr64_t target) -> addr64_t {
+    if (target >= origin_start && target < origin_end) {
+      auto it = origin_to_relo.find((addr_t)target);
+      if (it != origin_to_relo.end())
+        return it->second;
+    }
+    return target;
+  };
+
   addr_t buffer_cursor = (addr_t)buffer;
   arm64_inst_t instr = *(arm64_inst_t *)buffer_cursor;
 
@@ -136,7 +154,13 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
   while (buffer_cursor < ((addr_t)buffer + predefined_relocate_size)) {
     int last_relo_offset = turbo_assembler_.GetCodeBuffer()->getSize();
 
-    if ((instr & LoadRegLiteralFixedMask) == LoadRegLiteralFixed) { // ldr x0, #16
+    // record relocated address for this origin instruction (before expanding it)
+    {
+      addr_t relo_addr = relocated->raw_instruction_start() + turbo_assembler_.pc_offset();
+      origin_to_relo[(addr_t)curr_orig_pc] = relo_addr;
+    }
+
+    if ((instr & LoadRegLiteralFixedMask) == LoadRegLiteralFixed) { // ldr x0, #16 / ldrsw / prfm
       int rt = decode_rt(instr);
       char opc = bits(instr, 30, 31);
       addr64_t memory_address = decode_imm19_offset(instr) + curr_orig_pc;
@@ -149,6 +173,10 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
           _ ldr(W(rt), MEM(TMP_REG_0, 0));
         else if (opc == 0b01)
           _ ldr(X(rt), MEM(TMP_REG_0, 0));
+        else if (opc == 0b10)
+          _ ldrsw(X(rt), MEM(TMP_REG_0, 0)); // ldrsw sign-extends a 32-bit load
+        else if (opc == 0b11)
+          _ prfm(MEM(TMP_REG_0, 0)); // prfm is a cache hint; preserve the address target
         else {
           UNIMPLEMENTED();
         }
@@ -175,7 +203,8 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
       debug_nop();
 
     } else if ((instr & UnconditionalBranchFixedMask) == UnconditionalBranchFixed) { // b xxx
-      addr_t branch_address = decode_imm26_offset(instr) + curr_orig_pc;
+      addr64_t branch_address = decode_imm26_offset(instr) + curr_orig_pc;
+      branch_address = ResolveBranchTarget(branch_address);
       RelocLabelEntry *branchAddressLabel = new RelocLabelEntry(branch_address);
       _ AppendRelocLabelEntry(branchAddressLabel);
 
@@ -191,6 +220,7 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
       debug_nop();
     } else if ((instr & TestBranchFixedMask) == TestBranchFixed) { // tbz, tbnz
       addr64_t branch_address = decode_imm14_offset(instr) + curr_orig_pc;
+      branch_address = ResolveBranchTarget(branch_address);
       RelocLabelEntry *branchAddressLabel = new RelocLabelEntry(branch_address);
       _ AppendRelocLabelEntry(branchAddressLabel);
 
@@ -216,6 +246,7 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
 
     } else if ((instr & CompareBranchFixedMask) == CompareBranchFixed) { // cbz cbnz
       addr64_t branch_address = decode_imm19_offset(instr) + curr_orig_pc;
+      branch_address = ResolveBranchTarget(branch_address);
 
       arm64_inst_t branch_instr = instr;
 
@@ -241,6 +272,7 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
       debug_nop();
     } else if ((instr & ConditionalBranchFixedMask) == ConditionalBranchFixed) { // b.cond
       addr64_t branch_address = decode_imm19_offset(instr) + curr_orig_pc;
+      branch_address = ResolveBranchTarget(branch_address);
 
       arm64_inst_t branch_instr = instr;
 

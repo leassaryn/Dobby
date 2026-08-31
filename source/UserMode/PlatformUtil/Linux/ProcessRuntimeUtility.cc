@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <link.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <limits.h>
 
 #include <string>
@@ -211,12 +212,30 @@ static std::vector<RuntimeModule> get_process_map_with_linker_iterator() {
 #endif
 
 std::vector<RuntimeModule> ProcessRuntimeUtility::GetProcessModuleMap() {
+  // Cache the parsed map and refresh only when /proc/self/maps changes, so
+  // repeated symbol lookups don't re-parse it every time. dlopen/dlclose bump
+  // the file size+mtime, which invalidates the cache and triggers a re-parse.
+  static std::vector<RuntimeModule> cache;
+  static bool cache_valid = false;
+  static off_t cache_size = 0;
+  static time_t cache_mtime = 0;
+
+  struct stat st;
+  if (stat("/proc/self/maps", &st) == 0 && st.st_size == cache_size && st.st_mtime == cache_mtime && cache_valid) {
+    return cache;
+  }
+
 #if defined(__LP64__) && 0
   // TODO: won't resolve main binary
-  return get_process_map_with_linker_iterator();
+  cache = get_process_map_with_linker_iterator();
 #else
-  return get_process_map_with_proc_maps();
+  cache = get_process_map_with_proc_maps();
 #endif
+
+  cache_size = st.st_size;
+  cache_mtime = st.st_mtime;
+  cache_valid = true;
+  return cache;
 }
 
 RuntimeModule ProcessRuntimeUtility::GetProcessModule(const char *name) {

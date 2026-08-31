@@ -2,14 +2,12 @@
 
 [![Contact me Telegram](https://img.shields.io/badge/Contact%20me-Telegram-blue.svg)](https://t.me/IOFramebuffer) [![Join group Telegram](https://img.shields.io/badge/Join%20group-Telegram-brightgreen.svg)](https://t.me/dobby_group)  
 
-Dobby a lightweight, multi-platform, multi-architecture exploit hook framework.
+Dobby a lightweight, multi-architecture exploit hook framework for Android/Linux.
 
 - Minimal and modular library
-- Multi-platform support(Windows/macOS/iOS/Android/Linux)
 - Multiple architecture support(X86, X86-64, ARM, ARM64)
 - Clean code without STL(port to kernel easily)
-- Plugin support(SymbolResolver, SupervisorCallMonitor)
-- iOS kernel exploit support(Gollum ?)
+- Plugin support(SymbolResolver, BionicLinkerRestriction, LinkerLoadCallback)
 
 ## Getting started
 
@@ -22,8 +20,6 @@ mkdir build; cd build; cmake ..
 Or download [latest release](https://github.com/jmpews/Dobby/releases/tag/latest)
 
 #### [Build Installation](docs/build-documentation.md)
-
-#### [Getting Started with iOS](docs/get-started-ios.md)
 
 #### [Getting Started with Android](docs/get-started-android.md)
 

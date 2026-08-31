@@ -10,9 +10,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include <unordered_map>
 #include <vector>
-#include <set>
 
 #include "dobby.h"
 #include "dobby_symbol_resolver.h"
@@ -71,12 +69,12 @@ std::vector<soinfo_t> linker_get_solist() {
   static soinfo_t (*solist_get_head)() = NULL;
   if (!solist_get_head)
     solist_get_head =
-        (soinfo_t(*)())resolve_elf_internal_symbol(get_android_linker_path(), "__dl__Z15solist_get_headv");
+        (soinfo_t (*)())resolve_elf_internal_symbol(get_android_linker_path(), "__dl__Z15solist_get_headv");
 
   static soinfo_t (*solist_get_somain)() = NULL;
   if (!solist_get_somain)
     solist_get_somain =
-        (soinfo_t(*)())resolve_elf_internal_symbol(get_android_linker_path(), "__dl__Z17solist_get_somainv");
+        (soinfo_t (*)())resolve_elf_internal_symbol(get_android_linker_path(), "__dl__Z17solist_get_somainv");
 
   static addr_t *solist_head = NULL;
   if (!solist_head)
@@ -86,7 +84,7 @@ std::vector<soinfo_t> linker_get_solist() {
   if (!somain)
     somain = (addr_t)solist_get_somain();
 
-    // Generate the name for an offset.
+  // Generate the name for an offset.
 #define PARAM_OFFSET(type_, member_) __##type_##__##member_##__offset_
 #define STRUCT_OFFSET PARAM_OFFSET
   int STRUCT_OFFSET(solist, next) = 0;
@@ -121,7 +119,7 @@ uintptr_t linker_soinfo_to_handle(soinfo_t soinfo) {
   static uintptr_t (*_linker_soinfo_to_handle)(soinfo_t) = NULL;
   if (!_linker_soinfo_to_handle)
     _linker_soinfo_to_handle =
-        (uintptr_t(*)(soinfo_t))resolve_elf_internal_symbol(get_android_linker_path(), "__dl__ZN6soinfo9to_handleEv");
+        (uintptr_t (*)(soinfo_t))resolve_elf_internal_symbol(get_android_linker_path(), "__dl__ZN6soinfo9to_handleEv");
   return _linker_soinfo_to_handle(soinfo);
 }
 
@@ -129,7 +127,7 @@ typedef void *android_namespace_t;
 android_namespace_t linker_soinfo_get_primary_namespace(soinfo_t soinfo) {
   static android_namespace_t (*_get_primary_namespace)(soinfo_t) = NULL;
   if (!_get_primary_namespace)
-    _get_primary_namespace = (android_namespace_t(*)(soinfo_t))resolve_elf_internal_symbol(
+    _get_primary_namespace = (android_namespace_t (*)(soinfo_t))resolve_elf_internal_symbol(
         get_android_linker_path(), "__dl__ZN6soinfo21get_primary_namespaceEv");
   return _get_primary_namespace(soinfo);
 }
@@ -148,31 +146,16 @@ static int iterate_soinfo_cb(soinfo_t soinfo) {
   ns = linker_soinfo_get_primary_namespace(soinfo);
   LOG(1, "lib: %s", linker_soinfo_get_realpath(soinfo));
 
-  // set is_isolated_ as false
-  // no need for this actually
+  // Clear the namespace isolation flag so dlopen() is not restricted.
+  //
+  // NOTE: this only touches a plain bool member at a fixed offset, which is
+  // the mechanism that actually disables the namespace restriction. The old
+  // code also dereferenced/manipulated the `ld_library_paths_` member as a
+  // `std::vector<std::string>` directly inside linker memory, which is
+  // undefined behavior (double-free / heap corruption) and is not required;
+  // it has been removed.
   int STRUCT_OFFSET(android_namespace_t, is_isolated_) = 0x8;
   *(uint8_t *)((addr_t)ns + STRUCT_OFFSET(android_namespace_t, is_isolated_)) = false;
-
-  std::vector<std::string> ld_library_paths = {"/system/lib64", "/sytem/lib"};
-  if (get_android_system_version() >= Q) {
-    ld_library_paths.push_back("/apex/com.android.runtime/lib64");
-    ld_library_paths.push_back("/apex/com.android.runtime/lib");
-  }
-  int STRUCT_OFFSET(android_namespace_t, ld_library_paths_) = 0x10;
-  if (*(void **)((addr_t)ns + STRUCT_OFFSET(android_namespace_t, ld_library_paths_))) {
-    std::vector<std::string> orig_ld_library_paths =
-        *(std::vector<std::string> *)((addr_t)ns + STRUCT_OFFSET(android_namespace_t, ld_library_paths_));
-    orig_ld_library_paths.insert(orig_ld_library_paths.end(), ld_library_paths.begin(), ld_library_paths.end());
-
-    // remove duplicates
-    {
-      std::set<std::string> paths(orig_ld_library_paths.begin(), orig_ld_library_paths.end());
-      orig_ld_library_paths.assign(paths.begin(), paths.end());
-    }
-  } else {
-    *(std::vector<std::string> *)((addr_t)ns + STRUCT_OFFSET(android_namespace_t, ld_library_paths_)) =
-        std::move(ld_library_paths);
-  }
   return 0;
 }
 

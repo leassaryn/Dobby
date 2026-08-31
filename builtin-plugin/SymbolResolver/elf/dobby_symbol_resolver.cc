@@ -1,4 +1,5 @@
 #include "SymbolResolver/dobby_symbol_resolver.h"
+#include "dobby.h"
 #include "common_header.h"
 
 #include <elf.h>
@@ -40,7 +41,7 @@ static void file_mmap(const char *file_path, uint8_t **data_ptr, size_t *data_si
   }
 
   // auto align
-  mmap_data = (uint8_t *)mmap(0, file_size, PROT_READ | PROT_WRITE, MAP_FILE | MAP_PRIVATE, fd, 0);
+  mmap_data = (uint8_t *)mmap(0, file_size, PROT_READ, MAP_FILE | MAP_PRIVATE, fd, 0);
   if (mmap_data == MAP_FAILED) {
     ERROR_LOG("mmap failed");
     goto finished;
@@ -231,7 +232,7 @@ void *resolve_elf_internal_symbol(const char *library_name, const char *symbol_n
     }
 
     if (result)
-      result = (void *)((addr_t)result + (addr_t)module.load_address - ((addr_t)file_mem - (addr_t)ctx.load_bias));
+      result = (void *)((addr_t)result + (addr_t)module.load_address);
 
     if (file_mem)
       file_unmap(file_mem, file_mem_size);
@@ -254,7 +255,7 @@ void *resolve_elf_internal_symbol(const char *library_name, const char *symbol_n
       }
 
       if (result)
-        result = (void *)((addr_t)result + (addr_t)module.load_address - ((addr_t)file_mem - (addr_t)ctx.load_bias));
+        result = (void *)((addr_t)result + (addr_t)module.load_address);
 
       if (file_mem)
         file_unmap(file_mem, file_mem_size);
@@ -289,4 +290,22 @@ PUBLIC void *DobbySymbolResolver(const char *image_name, const char *symbol_name
 
   result = resolve_elf_internal_symbol(image_name, symbol_name_pattern);
   return result;
+}
+
+// Convenience: resolve a symbol (across all loaded modules when image_name is
+// NULL) then hook it immediately. Returns RS_FAILED if the symbol cannot be
+// resolved or if the hook itself fails.
+PUBLIC int DobbyHookByName(const char *image_name, const char *symbol_name, void *replace_call, void **origin_call) {
+  if (symbol_name == NULL || replace_call == NULL) {
+    ERROR_LOG("invalid DobbyHookByName arguments");
+    return RS_FAILED;
+  }
+
+  void *address = DobbySymbolResolver(image_name, symbol_name);
+  if (address == NULL) {
+    ERROR_LOG("symbol %s not found in %s", symbol_name, image_name ? image_name : "any module");
+    return RS_FAILED;
+  }
+
+  return DobbyHook(address, replace_call, origin_call);
 }

@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#undef LOG_TAG
 #define LOG_TAG "LinkerLoadCallback"
 
 std::vector<linker_load_callback_t> *linker_load_callback_array;

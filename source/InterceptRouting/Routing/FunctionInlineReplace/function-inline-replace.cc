@@ -5,6 +5,12 @@
 void FunctionInlineReplaceRouting::DispatchRouting() {
   BuildReplaceRouting();
 
+  // guard against a failed trampoline generation (e.g. no near code cave)
+  if (trampoline_buffer_ == NULL || trampoline_buffer_->getSize() == 0) {
+    ERROR_LOG("failed to generate trampoline buffer for %p", entry_->target_address);
+    return;
+  }
+
   // generate relocated code which size == trampoline size
   GenerateRelocatedCode(trampoline_buffer_->getSize());
 }

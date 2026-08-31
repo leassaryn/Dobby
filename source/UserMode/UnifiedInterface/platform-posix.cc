@@ -132,11 +132,25 @@ int OSMemory::PageSize() {
 void *OSMemory::Allocate(void *address, int size, MemoryPermission access) {
   int prot = GetProtectionFromMemoryPermission(access);
 
-  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+  void *result = MAP_FAILED;
+
+  // A hint address is requested. Prefer MAP_FIXED_NOREPLACE so we fail instead
+  // of silently clobbering an existing mapping (MAP_FIXED would). On kernels
+  // that do not implement it (EINVAL/ENOSYS) fall back to treating the address
+  // as a hint only, which still never clobbers existing memory.
   if (address != NULL) {
-    flags = flags | MAP_FIXED;
+#if defined(__linux__) && defined(MAP_FIXED_NOREPLACE)
+    result = mmap(address, size, prot, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, kMmapFd, kMmapFdOffset);
+    if (result == MAP_FAILED && (errno == EINVAL || errno == ENOSYS)) {
+      result = mmap(address, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, kMmapFd, kMmapFdOffset);
+    }
+#else
+    result = mmap(address, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, kMmapFd, kMmapFdOffset);
+#endif
+  } else {
+    result = mmap(NULL, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, kMmapFd, kMmapFdOffset);
   }
-  void *result = mmap(address, size, prot, flags, kMmapFd, kMmapFdOffset);
+
   if (result == MAP_FAILED)
     return nullptr;
 

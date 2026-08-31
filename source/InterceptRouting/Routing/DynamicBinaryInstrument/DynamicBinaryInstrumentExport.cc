@@ -12,13 +12,18 @@ PUBLIC int DobbyInstrument(void *address, DBICallTy handler) {
   RAW_LOG(1, "\n\n");
   DLOG(0, "[DobbyInstrument] Initialize at %p", address);
 
-  // check if we already instruemnt
+  // check if we already instrument
   HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
   if (entry) {
+    // reject conflicts: this address is already hooked with a different mechanism
+    if (entry->type != kDynamicBinaryInstrument) {
+      ERROR_LOG("address %p is already hooked; destroy it before instrumenting", address);
+      return RS_FAILED;
+    }
     DynamicBinaryInstrumentRouting *route = (DynamicBinaryInstrumentRouting *)entry->route;
     if (route->handler == handler) {
-      ERROR_LOG("instruction %s already been instrumented.", address);
-      return RS_FAILED;
+      // idempotent: already instrumented with the same handler; succeed as a no-op
+      return RS_SUCCESS;
     }
   }
 
@@ -30,6 +35,16 @@ PUBLIC int DobbyInstrument(void *address, DBICallTy handler) {
   DynamicBinaryInstrumentRouting *route = new DynamicBinaryInstrumentRouting(entry, (void *)handler);
   route->Prepare();
   route->DispatchRouting();
+
+  // abort if relocation/trampoline generation failed
+  if (!route->IsReady()) {
+    ERROR_LOG("failed to prepare instrument for %p", address);
+    route->Destroy();
+    delete route;
+    delete entry;
+    return RS_FAILED;
+  }
+
   Interceptor::SharedInstance()->AddHookEntry(entry);
   route->Commit();
 

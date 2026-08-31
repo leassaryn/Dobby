@@ -156,6 +156,10 @@ const char *DobbyBuildVersion();
 // hook and commit function
 int DobbyHook(void *address, void *replace_call, void **origin_call);
 
+// resolve a symbol by name and hook it in one call.
+// `image_name` may be NULL to search every loaded module.
+int DobbyHookByName(const char *image_name, const char *symbol_name, void *replace_call, void **origin_call);
+
 // prepare trampoline
 int DobbyPrepare(void *address, void *replace_call, void **origin_call);
 
@@ -165,17 +169,28 @@ int DobbyCommit(void *address);
 // dynamic binary instrument for instruction
 // [!!! READ ME !!!]
 // for Arm64, can't access q8 - q31, unless you enable full floating-point register pack
+//
+// [!!! READ ME (ARM64) !!!]
+// The instrumented function runs inside a closure bridge that uses X17 (and X16
+// as the branch target) as scratch registers. Your DBICallTy handler MUST NOT
+// assume X16/X17 keep their incoming values, and it MUST NOT leave X16/X17
+// modified if it expects the relocated code (next-hop) to run — Dobby restores
+// the next-hop branch target via X17.
 typedef void (*DBICallTy)(RegisterContext *ctx, const HookEntryInfo *info);
+// Idempotent: instrumenting the same address with the same handler succeeds as
+// a no-op instead of failing.
 int DobbyInstrument(void *address, DBICallTy dbi_call);
 
 // destory and restore hook
 int DobbyDestroy(void *address);
 
+// Enumerate all active hook/instrument entries. `cb` is called with each
+// hooked address; return 0 to continue, non-zero to stop early.
+typedef int (*dobby_hook_iterator_t)(void *hook_address, void *userdata);
+int DobbyEnumerateHooks(dobby_hook_iterator_t cb, void *userdata);
+
 // iterate symbol table and find symbol
 void *DobbySymbolResolver(const char *image_name, const char *symbol_name);
-
-// global offset table
-int DobbyGlobalOffsetTableReplace(char *image_name, char *symbol_name, void *fake_func, void **orig_func);
 
 // [!!! READ ME !!!]
 // for arm, Arm64, dobby will use b xxx instead of ldr absolute indirect branch

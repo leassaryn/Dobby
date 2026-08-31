@@ -1,83 +1,42 @@
-# Build 
+# Build
 
-## Cmake build options
+Dobby targets **Android only** (ABIs: arm64-v8a, armeabi-v7a, x86, x86_64). It builds with **C++23** (`.cpp`) and **C23** (`.c`).
+
+## CMake build options
 
 ```
-option(DOBBY_GENERATE_SHARED "Build shared library" ON)
+option(DOBBY_GENERATE_SHARED "Build shared library" OFF)
 
-option(DOBBY_DEBUG "Enable debug logging" ON)
+option(DOBBY_DEBUG "Enable debug logging" OFF)
 
 option(NearBranch "Enable Near Branch Trampoline" ON)
 
 option(DynamicBinaryInstrument "Enable Dynamic Binary Instrument" ON)
 
-option(FullFloatingPointRegisterPack "Save and pack all floating-point registers" OFF)
+option(FullFloatingPointRegisterPack "Save and pack all floating-point registers" ON)
 
 option(Plugin.SymbolResolver "Resolve symbol by [DobbySymbolResolver] " ON)
 
-option(Plugin.GlobalOffsetTableHook "Global Offset Table Hook by [DobbyGlobalOffsetTableReplace] " ON)
+option(Plugin.LinkerLoadCallback "Register image load callback " ON)
 
-option(Plugin.LinkerLoadCallback "Register image load callback " OFF)
+option(Plugin.Android.BionicLinkerRestriction "Enable android bionic linker restriction" OFF)
 ```
 
-## Build script
+## Build script (preferred for Android)
 
-refer: [build-workspace/auto-build.sh](build-workspace/auto-build.sh)
+`build-workspace/auto-build.sh` builds static libs for all 4 ABIs
+(arm64-v8a, armeabi-v7a, x86, x86_64) and copies them into `build-workspace/prefab/`.
 
-## Build for host
-
-```
-cd Dobby && mkdir build_for_host && cd build_for_host
-
-cmake ..
-
-make -j4
-```
-
-## Build for Windows using MINGW
+Requires `ANDROID_NDK_HOME` (not `ANDROID_NDK`), and an NDK >= r26 for C++23:
 
 ```
-cd Dobby && mkdir build_for_windows_x64 && cd build_for_windows_x64
-
-cmake .. \
--DCMAKE_BUILD_TYPE=Release \
--DCMAKE_SYSTEM_NAME=Windows \
--DCMAKE_SYSTEM_PROCESSOR=x64
-
-make -j4
+ANDROID_NDK_HOME=<ndk> build-workspace/auto-build.sh
 ```
 
-## Build for iOS / macOS
-
-#### Manual build for macOS X64 host
+## Build for Android (manual)
 
 ```
-cd Dobby && mkdir build_for_macos_x64 && cd build_for_macos_x64
-
-cmake .. \
--DCMAKE_BUILD_TYPE=Release \
-
-make -j4
-```
-
-#### Manual build for iOS [ARM/ARM64]
-
-```
-cd Dobby && mkdir build_for_ios_arm64 && cd build_for_ios_arm64
-
-cmake .. -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_SYSTEM_PROCESSOR=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=9.3
-
-make -j4
-```
-
-if you want generate Xcode Project, just replace with `cmake -G Xcode`.
-
-## Build for Android
-
-#### Manual build for Android ARM64
-
-```
-export ANDROID_NDK=/Users/jmpews/Library/Android/sdk/ndk-bundle
+export ANDROID_NDK=/path/to/android-sdk/ndk/<version>
 
 cd Dobby && mkdir build_for_android_arm64 && cd build_for_android_arm64
 
@@ -85,27 +44,16 @@ cmake .. \
 -DCMAKE_BUILD_TYPE=Release \
 -DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI="arm64-v8a" -DCMAKE_ANDROID_NDK=$ANDROID_NDK -DCMAKE_SYSTEM_VERSION=21 -DCMAKE_ANDROID_NDK_TOOLCHAIN_VERSION=clang
 
-make -j4
+make -j4 dobby
 ```
 
-#### Manual build for Android ARM
+For ARM (32-bit) replace `arm64-v8a` with `armeabi-v7a` (and `-DCMAKE_SYSTEM_VERSION=16`).
 
-```
-export ANDROID_NDK=/Users/jmpews/Library/Android/sdk/ndk-bundle
-
-cd Dobby && mkdir build_for_android_arm && cd build_for_android_arm
-
--DCMAKE_BUILD_TYPE=Release \
--DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI="armeabi-v7a" -DCMAKE_ANDROID_NDK=$ANDROID_NDK -DCMAKE_SYSTEM_VERSION=16 -DCMAKE_ANDROID_NDK_TOOLCHAIN_VERSION=clang 
-
-make -j4
-```
-
-#### Android Studio CMake
+## Android Studio CMake
 
 ```
 if(NOT TARGET dobby)
-set(DOBBY_DIR /Users/jmpews/Workspace/Project.wrk/Dobby)
+set(DOBBY_DIR /path/to/Dobby)
 macro(SET_OPTION option value)
   set(${option} ${value} CACHE INTERNAL "" FORCE)
 endmacro()

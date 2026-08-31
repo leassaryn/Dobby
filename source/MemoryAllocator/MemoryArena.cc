@@ -2,7 +2,31 @@
 
 #include "dobby_internal.h"
 
+#if defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
+#include <pthread.h>
+#endif
+
 LiteMutableArray *MemoryArena::page_chunks = NULL;
+void *MemoryArena::lock_ = NULL;
+
+void MemoryArena::Lock() {
+#if defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
+  if (lock_ == NULL) {
+    pthread_mutex_t *mutex = new pthread_mutex_t;
+    pthread_mutex_init(mutex, NULL);
+    lock_ = mutex;
+  }
+  pthread_mutex_lock((pthread_mutex_t *)lock_);
+#endif
+}
+
+void MemoryArena::Unlock() {
+#if defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
+  if (lock_) {
+    pthread_mutex_unlock((pthread_mutex_t *)lock_);
+  }
+#endif
+}
 
 void MemoryArena::Destroy(AssemblyCodeChunk *cchunk) {
   return;
@@ -10,6 +34,8 @@ void MemoryArena::Destroy(AssemblyCodeChunk *cchunk) {
 
 MemoryChunk *MemoryArena::AllocateChunk(int alloc_size, MemoryPermission permission) {
   MemoryChunk *result = NULL;
+
+  Lock();
 
   if (page_chunks == NULL) {
     page_chunks = new LiteMutableArray(8);
@@ -32,6 +58,7 @@ MemoryChunk *MemoryArena::AllocateChunk(int alloc_size, MemoryPermission permiss
     void *pageAddress = OSMemory::Allocate(NULL, pageSize, permission);
     if (pageAddress == NULL) {
       ERROR_LOG("Failed to alloc page");
+      Unlock();
       return NULL;
     }
 
@@ -55,6 +82,8 @@ MemoryChunk *MemoryArena::AllocateChunk(int alloc_size, MemoryPermission permiss
     page->chunks->pushObject(reinterpret_cast<LiteObject *>(chunk));
     page->page_cursor += alloc_size;
   }
+
+  Unlock();
 
   result = chunk;
   return result;

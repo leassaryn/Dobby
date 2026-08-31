@@ -10,6 +10,19 @@ void InterceptRouting::Prepare() {
 
 // Generate relocated code
 bool InterceptRouting::GenerateRelocatedCode(int tramp_size) {
+  // prologue verification: the target must be set, the trampoline size sane,
+  // and (on fixed-width ISAs) a whole number of instructions.
+  if (entry_->target_address == NULL || tramp_size <= 0) {
+    ERROR_LOG("invalid hook target %p / trampoline size %d", entry_->target_address, tramp_size);
+    return false;
+  }
+#if defined(TARGET_ARCH_ARM64) || defined(TARGET_ARCH_ARM)
+  if (tramp_size % 4 != 0) {
+    ERROR_LOG("trampoline size %d is not a multiple of the instruction size", tramp_size);
+    return false;
+  }
+#endif
+
   // generate original code
   AssemblyCodeChunk *origin = NULL;
   origin = AssemblyCodeBuilder::FinalizeFromAddress((addr_t)entry_->target_address, tramp_size);
@@ -32,10 +45,19 @@ bool InterceptRouting::GenerateRelocatedCode(int tramp_size) {
   DLOG(0, "[insn relocate] origin %p - %d", origin->raw_instruction_start(), origin->raw_instruction_size());
   DLOG(0, "[insn relocate] relocated %p - %d", relocated->raw_instruction_start(), relocated->raw_instruction_size());
 
-  // save original prologue
-  memcpy((void *)entry_->origin_chunk_.chunk_buffer, (void *)origin_->raw_instruction_start(),
-         origin_->raw_instruction_size());
+  // Save the original prologue bytes for a later DobbyDestroy restore.
+  // `origin` points at the un-patched target code, so this is a verbatim copy.
+  // Guard against the fixed-size inline buffer being overflowed.
+  size_t origin_size = origin_->raw_instruction_size();
+  if (origin_size > sizeof(entry_->origin_chunk_.chunk_buffer)) {
+    ERROR_LOG("origin prologue size %zu exceeds inline buffer %zu", origin_size,
+              sizeof(entry_->origin_chunk_.chunk_buffer));
+    return false;
+  }
+  memcpy((void *)entry_->origin_chunk_.chunk_buffer, (void *)origin_->raw_instruction_start(), origin_size);
   entry_->origin_chunk_.chunk.re_init_region_range(origin_);
+
+  is_ready_ = true;
   return true;
 }
 
@@ -72,6 +94,21 @@ void InterceptRouting::Active() {
 
 void InterceptRouting::Commit() {
   this->Active();
+}
+
+void InterceptRouting::Destroy() {
+  if (trampoline_buffer_) {
+    delete trampoline_buffer_;
+    trampoline_buffer_ = NULL;
+  }
+  if (origin_) {
+    delete origin_;
+    origin_ = NULL;
+  }
+  if (relocated_) {
+    delete relocated_;
+    relocated_ = NULL;
+  }
 }
 
 #if 0
