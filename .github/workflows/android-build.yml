@@ -131,16 +131,22 @@ jobs:
       - name: Download Debug Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: artifacts/debug/
           pattern: Android-Debug-*
           merge-multiple: true
 
       - name: Download Release Artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts/
+          path: artifacts/release/
           pattern: Android-Release-*
           merge-multiple: true
+
+      - name: Zip artifacts
+        run: |
+          cd artifacts
+          zip -r ../dobby-android-debug.zip debug/
+          zip -r ../dobby-android-release.zip release/
 
       - name: Upload Combined Artifact
         uses: actions/upload-artifact@v4
@@ -148,12 +154,6 @@ jobs:
           name: Android-All-Artifacts
           path: artifacts/
           retention-days: 30
-
-      - name: Zip artifacts
-        run: |
-          cd artifacts
-          zip -r ../dobby-android-debug.zip Android-Debug-*/
-          zip -r ../dobby-android-release.zip Android-Release-*/
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
