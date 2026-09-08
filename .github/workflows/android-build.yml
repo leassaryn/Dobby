@@ -3,13 +3,9 @@ name: Android Build
 on:
   push:
     branches: [master, main]
-    tags: ['v*']
   pull_request:
     branches: [master, main]
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build-debug:
@@ -157,12 +153,3 @@ jobs:
           name: Android-All-Artifacts
           path: artifacts/
           retention-days: 30
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            dobby-android-debug.zip
-            dobby-android-release.zip
-          generate_release_notes: true
