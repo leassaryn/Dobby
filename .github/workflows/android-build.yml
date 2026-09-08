@@ -25,23 +25,19 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          accept-android-sdk-licenses: true
-
-      - name: Install NDK r29
-        run: |
-          sdkmanager --install "ndk;29.0.13113456" 2>/dev/null || \
-          sdkmanager --install "ndk;29.0.13113456" --channel=3
-          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+          ndk-version: r29
+          link-to-sdk: true
 
       - name: Configure CMake
         run: |
           cmake -DCMAKE_SYSTEM_NAME=Android \
                 -DANDROID_ABI=${{ matrix.arch }} \
                 -DANDROID_PLATFORM=android-29 \
-                -DANDROID_NDK=$ANDROID_HOME/ndk/29.0.13113456 \
+                -DANDROID_NDK=${{ steps.setup-ndk.outputs.ndk-path }} \
                 -DCMAKE_BUILD_TYPE=Debug \
                 -DDynamicBinaryInstrument=ON \
                 -DPlugin.SymbolResolver=ON \
@@ -81,23 +77,19 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
-          accept-android-sdk-licenses: true
-
-      - name: Install NDK r29
-        run: |
-          sdkmanager --install "ndk;29.0.13113456" 2>/dev/null || \
-          sdkmanager --install "ndk;29.0.13113456" --channel=3
-          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+          ndk-version: r29
+          link-to-sdk: true
 
       - name: Configure CMake
         run: |
           cmake -DCMAKE_SYSTEM_NAME=Android \
                 -DANDROID_ABI=${{ matrix.arch }} \
                 -DANDROID_PLATFORM=android-29 \
-                -DANDROID_NDK=$ANDROID_HOME/ndk/29.0.13113456 \
+                -DANDROID_NDK=${{ steps.setup-ndk.outputs.ndk-path }} \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DDynamicBinaryInstrument=ON \
                 -DPlugin.SymbolResolver=ON \
