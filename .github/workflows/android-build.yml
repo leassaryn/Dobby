@@ -15,15 +15,6 @@ jobs:
     strategy:
       matrix:
         arch: [arm64-v8a, armeabi-v7a, x86, x86_64]
-        include:
-          - arch: arm64-v8a
-            android_arch: arm64-v8a
-          - arch: armeabi-v7a
-            android_arch: armeabi-v7a
-          - arch: x86
-            android_arch: x86
-          - arch: x86_64
-            android_arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +39,6 @@ jobs:
       - name: Configure CMake
         run: |
           cmake -DCMAKE_SYSTEM_NAME=Android \
-                -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.android_arch }} \
                 -DANDROID_ABI=${{ matrix.arch }} \
                 -DANDROID_PLATFORM=android-29 \
                 -DANDROID_NDK=$ANDROID_HOME/ndk/29.0.13113456 \
@@ -80,15 +70,6 @@ jobs:
     strategy:
       matrix:
         arch: [arm64-v8a, armeabi-v7a, x86, x86_64]
-        include:
-          - arch: arm64-v8a
-            android_arch: arm64-v8a
-          - arch: armeabi-v7a
-            android_arch: armeabi-v7a
-          - arch: x86
-            android_arch: x86
-          - arch: x86_64
-            android_arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +94,6 @@ jobs:
       - name: Configure CMake
         run: |
           cmake -DCMAKE_SYSTEM_NAME=Android \
-                -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.android_arch }} \
                 -DANDROID_ABI=${{ matrix.arch }} \
                 -DANDROID_PLATFORM=android-29 \
                 -DANDROID_NDK=$ANDROID_HOME/ndk/29.0.13113456 \
