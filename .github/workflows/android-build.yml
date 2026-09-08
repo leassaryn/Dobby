@@ -1,0 +1,167 @@
+name: Android Build
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    name: Android Debug Build
+
+    strategy:
+      matrix:
+        arch: [arm64-v8a, armeabi-v7a, x86, x86_64]
+        include:
+          - arch: arm64-v8a
+            android_arch: arm64-v8a
+          - arch: armeabi-v7a
+            android_arch: armeabi-v7a
+          - arch: x86
+            android_arch: x86
+          - arch: x86_64
+            android_arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+
+      - name: Install NDK r29
+        run: |
+          sdkmanager --install "ndk;29.0.13113456" 2>/dev/null || \
+          sdkmanager --install "ndk;29.0.13113456" --channel=3
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          cmake -DCMAKE_SYSTEM_NAME=Android \
+                -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.android_arch }} \
+                -DANDROID_ABI=${{ matrix.arch }} \
+                -DANDROID_PLATFORM=android-29 \
+                -DANDROID_NDK=$ANDROID_HOME/ndk/29.0.13113456 \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DDynamicBinaryInstrument=ON \
+                -DPlugin.SymbolResolver=ON \
+                -B build-debug/${{ matrix.arch }}
+
+      - name: Build Debug
+        run: |
+          cmake --build build-debug/${{ matrix.arch }} --target dobby -j$(nproc)
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p build_result/debug
+          cp build-debug/${{ matrix.arch }}/libdobby.so build_result/debug/libdobby_${{ matrix.arch }}.so || \
+          cp build-debug/${{ matrix.arch }}/libdobby.a build_result/debug/libdobby_${{ matrix.arch }}.a
+
+      - name: Upload Debug Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Debug-${{ matrix.arch }}
+          path: build_result/debug/
+
+  build-release:
+    runs-on: ubuntu-latest
+    name: Android Release Build
+
+    strategy:
+      matrix:
+        arch: [arm64-v8a, armeabi-v7a, x86, x86_64]
+        include:
+          - arch: arm64-v8a
+            android_arch: arm64-v8a
+          - arch: armeabi-v7a
+            android_arch: armeabi-v7a
+          - arch: x86
+            android_arch: x86
+          - arch: x86_64
+            android_arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+
+      - name: Install NDK r29
+        run: |
+          sdkmanager --install "ndk;29.0.13113456" 2>/dev/null || \
+          sdkmanager --install "ndk;29.0.13113456" --channel=3
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.13113456" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          cmake -DCMAKE_SYSTEM_NAME=Android \
+                -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.android_arch }} \
+                -DANDROID_ABI=${{ matrix.arch }} \
+                -DANDROID_PLATFORM=android-29 \
+                -DANDROID_NDK=$ANDROID_HOME/ndk/29.0.13113456 \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DDynamicBinaryInstrument=ON \
+                -DPlugin.SymbolResolver=ON \
+                -B build-release/${{ matrix.arch }}
+
+      - name: Build Release
+        run: |
+          cmake --build build-release/${{ matrix.arch }} --target dobby -j$(nproc)
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p build_result/release
+          cp build-release/${{ matrix.arch }}/libdobby.so build_result/release/libdobby_${{ matrix.arch }}.so || \
+          cp build-release/${{ matrix.arch }}/libdobby.a build_result/release/libdobby_${{ matrix.arch }}.a
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Release-${{ matrix.arch }}
+          path: build_result/release/
+
+  collect:
+    runs-on: ubuntu-latest
+    name: Collect All Artifacts
+    needs: [build-debug, build-release]
+    if: always()
+
+    steps:
+      - name: Download Debug Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: Android-Debug-*
+          merge-multiple: true
+
+      - name: Download Release Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: Android-Release-*
+          merge-multiple: true
+
+      - name: Upload Combined Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-All-Artifacts
+          path: artifacts/
+          retention-days: 30
