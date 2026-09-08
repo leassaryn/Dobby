@@ -54,6 +54,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p build_result/debug
+          cp include/dobby.h build_result/debug/
           cp build-debug/${{ matrix.arch }}/libdobby.so build_result/debug/libdobby_${{ matrix.arch }}.so || \
           cp build-debug/${{ matrix.arch }}/libdobby.a build_result/debug/libdobby_${{ matrix.arch }}.a
 
@@ -109,6 +110,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p build_result/release
+          cp include/dobby.h build_result/release/
           cp build-release/${{ matrix.arch }}/libdobby.so build_result/release/libdobby_${{ matrix.arch }}.so || \
           cp build-release/${{ matrix.arch }}/libdobby.a build_result/release/libdobby_${{ matrix.arch }}.a
 
