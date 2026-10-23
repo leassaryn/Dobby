@@ -24,14 +24,59 @@ Other options: `NearBranch`, `DynamicBinaryInstrument`,
 `Plugin.LinkerLoadCallback`. These default ON; BionicLinkerRestriction defaults
 OFF. NearBranch is forced ON for x86/x64. Debug builds enable debug logging.
 
-`ANDROID_NDK_HOME=<ndk> sh build-workspace/auto-build.sh` builds all four static
-libraries. Run from the repository root: outputs go to `auto-build-workspace/`
-and `auto-build-output/`, with copies in root-level `prefab/`. The script replaces
-its summary output directory; it does not strip archives.
+## Python builder
 
-The external Termux helper `~/.local/bin/build` can also configure the toolchain.
-Its explicit four-ABI selection is `--abi arm64-v8a,armeabi-v7a,x86,x86_64`;
-its `--abi all` currently selects only ARM ABIs.
+Python 3 orchestrates CMake/NDK builds, packaging and ELF alignment checks. No
+third-party Python packages are required. Run from any working directory:
+
+```sh
+python3 scripts/build-android.py --ndk /path/to/ndk --abi all --prefab
+python3 scripts/build-android.py --abi arm64-v8a,armeabi-v7a --library shared --tests --api 30
+```
+
+`--ndk` defaults to `ANDROID_NDK_HOME` (then `ANDROID_NDK_ROOT`). `--cmake`
+(or `CMAKE`) selects a CMake executable, useful for the bundled SDK CMake on
+Termux. `--abi all` always builds all four ABIs. Input aliases `arm64`/`aarch64`
+and `armv7`/`arm` normalize to `arm64-v8a` and `armeabi-v7a` in every output path.
+
+Build and package variants are isolated:
+
+- Build: `build/android/<configuration>/<static|shared>/<abi>/`
+- Libraries/header/metadata: `build-output/<configuration>/<static|shared>/android/<abi>/`
+- Optional Prefab: `build-output/<configuration>/<static|shared>/prefab/`
+
+Configuration directory names are lowercase. `--build-root` and `--output-root`
+change the roots; relative custom paths resolve from the caller's working
+directory. Default paths always resolve from the repository. The builder does
+not strip libraries. `--clean-first` cleans CMake targets for the selected variants;
+`--dry-run` prints the plan without writing. `--archive build/dobby.tar.gz`
+packages only the selected ABI artifacts from this invocation, excluding stale
+outputs from previous builds. `DOBBY_BUILD_OUTPUT_NAME` is its legacy environment
+fallback. Archive members retain the configuration/type/ABI hierarchy.
+
+`--tests` builds device executables in the build directory and copies them, with
+the importer fixture, alongside the packaged library. For example:
+
+```sh
+python3 scripts/run-android-tests.py --build-root build/android/release/static --local
+```
+
+64-bit shared libraries and built device tests undergo ELF alignment checks;
+static archive alignment is checked through its final executable when `--tests`
+is enabled. No runtime tests are implied by a build. Build, release and device CI
+use the same Python builder. Release collection runs only after every matrix job
+succeeds, with static/shared and Debug/Release paths kept separate.
+
+`build-workspace/auto-build.sh` remains a thin Python launcher with `--prefab`.
+Its outputs now use the paths above; old `auto-build-output/android/arm64` and
+`android/armv7` paths are no longer produced. Existing old output directories are
+left untouched. The external `~/.local/bin/build` helper is outside this repo;
+use the repository Python entry point for these naming guarantees.
+
+Preview cleanup with `python3 scripts/clean-build.py --dry-run`, then omit
+`--dry-run` to remove generated build trees. Git-tracked files are preserved;
+symlinks are removed without traversing their targets. `build-workspace/clean.sh`
+is a compatibility launcher for the same cleaner.
 
 ## Integrate with an application
 
@@ -58,11 +103,30 @@ target_link_libraries(native-lib PRIVATE Dobby::dobby)
 ```
 
 The target exports the public header directory and link requirements. Do not copy
-Dobby's private include paths. The 64-bit target adds a 16 KB maximum ELF page
-alignment link option, also propagated to consumers. APK packaging and all other
+Dobby's private include paths. The 64-bit target adds both
+`-Wl,-z,max-page-size=16384` and `-Wl,-z,common-page-size=16384`,
+also propagated to consumers of the static and shared CMake targets. If you link
+`libdobby.a` manually instead of using the target, apply these flags when linking
+your final shared library. APK packaging and all other
 native dependencies still need independent checks; see Android's
 [16 KB page-size guide](https://developer.android.com/guide/practices/page-sizes)
 and the [NDK r28 changes](https://github.com/android/ndk/wiki/Changelog-r28).
+
+The allocator and patch protection code query the kernel page size at runtime;
+they support both 4 KB and 16 KB pages. ARM64 ADRP's 4 KB instruction granularity
+is independent of the kernel page size and must not be changed to 16 KB.
+Build CI checks all 64-bit test executables and shared libraries with:
+
+```sh
+python3 scripts/check-elf-alignment.py build/arm64-v8a/dobby_*_test build/arm64-v8a/*.so
+```
+
+This verifies ELF load segment alignment, including final executables linked to
+the static archive. It does not certify APK ZIP alignment or a 16 KB runtime.
+For that runtime check, run the device runner below with
+`--abi arm64-v8a --require-16k` on a 16 KB device/emulator; it must fail on a 4 KB device.
+The 16 KB Android artifact requirement applies to the 64-bit ABIs; ARMv7 remains
+supported on its existing Android environments.
 
 ## Runtime tests
 

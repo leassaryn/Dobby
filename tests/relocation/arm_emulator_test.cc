@@ -1,5 +1,6 @@
 #include "dobby_internal.h"
 #include "InstructionRelocation/InstructionRelocation.h"
+#include "InstructionRelocation/InstructionPlan.h"
 #include <capstone/capstone.h>
 #include <unicorn/unicorn.h>
 #include <array>
@@ -127,6 +128,29 @@ int main() {
         {"thumb-adr", true, 2, {0x4770a001, 0, 0}},
         {"thumb-it", true, 4, {0xbf0c2800, 0x21092107, 0x4770}},
     };
+    // Both taken and skipped predicates, including flag-changing TST/CMP/CMN,
+    // carry-dependent ALU operations and stack side effects. Each member is
+    // tested in ITE and in a four-member IT block, past the requested patch span.
+    const uint16_t members[] = {0x0041, 0x0841, 0x1041, 0x4001, 0x4041, 0x4081, 0x40c1, 0x4101, 0x4141, 0x4181, 0x41c1,
+                                0x4201, 0x4241, 0x4281, 0x42c1, 0x4301, 0x4341, 0x4381, 0x43c1, 0x9000, 0x9900, 0xa901};
+    for (uint16_t member : members) {
+      fixtures.push_back(
+          {"thumb-ite-copy", true, 4, {0xbf0c2800, uint32_t(member) | (uint32_t(member) << 16), 0x4770}});
+      fixtures.push_back({"thumb-itttt-copy",
+                          true,
+                          4,
+                          {0xbf012800, uint32_t(member) | (uint32_t(member) << 16),
+                           uint32_t(member) | (uint32_t(member) << 16), 0x4770}});
+    }
+    // Reject truncation at every member boundary and operands requiring fixups.
+    const uint16_t complete[] = {0xbf01, 0x0041, 0x4001, 0x9000, 0xa901};
+    for (size_t n = 0; n < sizeof(complete); ++n)
+      Check(dobby::ThumbItSize(complete, n) == 0, "truncated IT block");
+    Check(dobby::ThumbItSize(complete, sizeof(complete)) == sizeof(complete), "complete IT block");
+    for (uint16_t rejected : {0x4800, 0xa000, 0x4770, 0xbd01, 0xb100, 0xbf08, 0xdf00, 0xf000}) {
+      const uint16_t block[] = {0xbf08, rejected, 0};
+      Check(dobby::ThumbItSize(block, sizeof(block)) == 0, "unsafe IT member");
+    }
     for (const auto &f : fixtures) {
       memset(source.p, 0, 4096);
       memcpy(source.p, f.words.data(), f.words.size() * 4);

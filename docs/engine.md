@@ -59,10 +59,20 @@ alignment and immediate scaling.
 
 Supported Thumb IT blocks are copied as indivisible units, including members
 past the minimum patch span. The supported members are 16-bit immediate
-MOV/CMP/ADD/SUB and low-register ADD/SUB without PC operands. No alignment NOP or
+MOV/CMP/ADD/SUB, immediate shifts, low-register ADD/SUB and data-processing
+operations, SP-relative word loads/stores, and ADD of SP plus an immediate into
+a low register. PC operands remain excluded. No alignment NOP or
 expanded instruction is inserted inside the block. Other IT members are rejected;
 this is not complete Thumb-2 IT rewriting. Callers must supply a real instruction
 entry, not an address inside an existing IT block.
+
+The copy predicate retains ITSTATE and the original instruction encodings,
+including flag behavior described by [Arm's conditional execution documentation](https://developer.arm.com/community/arm-community-blogs/b/architectures-and-processors-blog/posts/condition-codes-3-conditional-execution-in-thumb-2).
+The emulator checks 22 added member encodings in two- and four-member blocks,
+with taken/skipped predicates, register/flag results and stack writes compared
+against the original code. Truncated blocks and PC-relative/control-flow members
+remain rejected. This extends existing binary compatibility; it does not promote
+multi-instruction IT blocks for newly generated Armv8 code.
 
 ## Read-only target analysis
 

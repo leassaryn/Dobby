@@ -95,6 +95,14 @@ inline Instruction DecodeArm(uint32_t word, uintptr_t pc) {
     i.kind = InstructionKind::Unsupported;
   return i;
 }
+// Position-independent narrow encodings that can retain their original ITSTATE.
+// Do not accept PC-relative operands, branches, system instructions or wide encodings.
+inline bool ThumbItCopyable(uint16_t word) {
+  return (word & 0xc000) == 0 ||      // Immediate shifts, low-register ADD/SUB, MOV/CMP/ADD/SUB immediate.
+         (word & 0xfc00) == 0x4000 || // Low-register data processing (including flag-setting comparisons).
+         (word & 0xf000) == 0x9000 || // SP-relative word loads/stores.
+         (word & 0xf800) == 0xa800;   // ADD low register, SP, immediate.
+}
 // A supported IT block is indivisible. Return zero if any member needs rewriting.
 inline size_t ThumbItSize(const void *bytes, size_t available) {
   if (available < 2)
@@ -110,7 +118,7 @@ inline size_t ThumbItSize(const void *bytes, size_t available) {
       return 0;
     uint16_t member;
     memcpy(&member, static_cast<const uint8_t *>(bytes) + size, 2);
-    if (!((member & 0xe000) == 0x2000 || (member & 0xf800) == 0x1800))
+    if (!ThumbItCopyable(member))
       return 0;
     size += 2;
     state = (state & 7) ? ((state & 0xe0) | ((state << 1) & 0x1f)) : 0;

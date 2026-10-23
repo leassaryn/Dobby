@@ -18,12 +18,15 @@ library by default, with a shared-library option, using C++23/C23.
 Use CMake 3.22+ and a C++23-capable Android NDK (r26 or newer; validation uses r29):
 
 ```sh
-cmake -S . -B build/arm64-v8a \
-  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
-  -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
-cmake --build build/arm64-v8a --target dobby --parallel 4
+export ANDROID_NDK_HOME=/path/to/android-ndk
+python3 scripts/build-android.py --abi all --prefab
 ```
+
+Outputs use canonical Android ABI names, for example
+`build-output/release/static/android/arm64-v8a/libdobby.a` and
+`build-output/release/static/android/armeabi-v7a/libdobby.a`.
+Use `--library shared`, `--configuration Debug`, or `--tests` as needed.
+
 
 See [build and device tests](docs/build-documentation.md),
 [API and migration guide](docs/api.md), [engine guide](docs/engine.md), [verification matrix](docs/compatibility.md),

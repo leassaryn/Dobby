@@ -320,8 +320,9 @@ target_include_directories(dobby PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 set_target_properties(dobby PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(SYSTEM.Android AND (PROCESSOR.AARCH64 OR PROCESSOR.X86_64))
-  target_link_options(dobby INTERFACE "-Wl,-z,max-page-size=16384")
-  target_link_options(dobby PRIVATE "-Wl,-z,max-page-size=16384")
+  # PUBLIC also propagates to consumers of the static archive. Their final ELF,
+  # not the archive itself, must satisfy Android's 16 KB loader requirements.
+  target_link_options(dobby PUBLIC "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384")
 endif()
 
 if(EnableObfuscation)
