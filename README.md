@@ -6,8 +6,8 @@ library by default, with a shared-library option, using C++23/C23.
 
 - Inline hooks, staged prepare/commit and register-context instrumentation.
 - Automatic ARM64 near trampolines for short methods, with conservative fallback checks.
-- Versioned per-hook options, patch-size limits and batch installation with rollback.
-- ELF PLT/GOT import hooks, explicit module pins and removable loader callbacks.
+- Versioned per-hook options, target analysis, patch coordination and batch rollback.
+- ELF PLT/GOT import hooks with version selection/slot inspection, module pins and removable callbacks.
 - Thread-local diagnostics, runtime capabilities, hook inspection and resource teardown.
 - Capstone/Unicorn differential relocation tests, seeded fuzzing/replay and an optional benchmark.
 - Optional ELF symbol resolution, linker-load callbacks and Bionic linker integration.
@@ -26,7 +26,7 @@ cmake --build build/arm64-v8a --target dobby --parallel 4
 ```
 
 See [build and device tests](docs/build-documentation.md),
-[API and migration guide](docs/api.md), [verification matrix](docs/compatibility.md),
+[API and migration guide](docs/api.md), [engine guide](docs/engine.md), [verification matrix](docs/compatibility.md),
 and the public [header](include/dobby.h).
 Android is the supported release target. The Linux CMake path is only a local
 development convenience; POSIX/Linux implementation files are required by Android.

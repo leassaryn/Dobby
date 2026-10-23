@@ -19,3 +19,25 @@ public:
     --dobby_internal_loader_depth;
   }
 };
+
+// Called only while the hook-operation mutex is held. No automatic thread suspension.
+class PatchScope {
+public:
+  PatchScope(void *address, size_t size, DobbyPatchOperation operation);
+  ~PatchScope();
+  bool ready() const {
+    return ready_;
+  }
+  void Applied() {
+    applied_ = true;
+  }
+
+private:
+  void *address_;
+  size_t size_;
+  DobbyPatchOperation operation_;
+  DobbyPatchCoordinator coordinator_{};
+  bool ready_ = false;
+  bool entered_ = false;
+  bool applied_ = false;
+};

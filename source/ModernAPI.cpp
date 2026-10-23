@@ -9,6 +9,8 @@
 #endif
 
 PUBLIC int DobbyHookBatch(const DobbyHookRequest *requests, size_t count, DobbyBatchResult *result) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   DobbySetError(DOBBY_ERROR_NONE);
   HookOperationGuard guard;
   if (!requests || !count || count > 4096 || !result || result->struct_size < sizeof(*result) ||

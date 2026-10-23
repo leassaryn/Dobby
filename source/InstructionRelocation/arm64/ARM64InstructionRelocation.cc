@@ -7,6 +7,8 @@
 
 #include <map>
 #include <memory>
+#include <vector>
+#include "InstructionRelocation/InstructionPlan.h"
 #include "MemoryAllocator/NearMemoryArena.h"
 
 #include "core/arch/arm64/registers-arm64.h"
@@ -136,6 +138,13 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
   // executable address are known. Forward branches cannot be resolved in one pass.
   const uint64_t origin_start = origin->raw_instruction_start();
   const uint64_t origin_end = origin_start + origin->raw_instruction_size();
+  struct LiteralCopy {
+    size_t mov_offset;
+    uintptr_t source;
+    size_t size;
+    size_t pool_offset;
+  };
+  std::vector<LiteralCopy> literal_copies;
   std::map<addr_t, size_t> origin_to_offset;
   std::map<RelocLabelEntry *, addr_t> branch_targets;
   std::map<RelocLabelEntry *, std::pair<size_t, bool>> branch_sites;
@@ -152,6 +161,11 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
 
   while (buffer_cursor < ((addr_t)buffer + predefined_relocate_size)) {
     const arm64_inst_t instr = *reinterpret_cast<const arm64_inst_t *>(buffer_cursor);
+    const auto decoded = dobby::DecodeArm64(instr, curr_orig_pc);
+    if (decoded.kind == dobby::InstructionKind::Unsupported) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
+    }
     int last_relo_offset = turbo_assembler_.GetCodeBuffer()->getSize();
 
     // record relocated address for this origin instruction (before expanding it)
@@ -159,7 +173,7 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
       origin_to_offset[static_cast<addr_t>(curr_orig_pc)] = turbo_assembler_.pc_offset();
     }
 
-    if ((instr & LoadRegLiteralFixedMask) == LoadRegLiteralFixed) { // ldr x0, #16 / ldrsw / prfm
+    if (decoded.kind == dobby::InstructionKind::Literal) { // ldr / ldrsw / prfm
       int rt = decode_rt(instr);
       char opc = bits(instr, 30, 31);
       addr64_t memory_address = decode_imm19_offset(instr) + curr_orig_pc;
@@ -167,6 +181,15 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
 #define MEM(reg, offset) MemOperand(reg, offset)
       debug_nop(); // for debug
       {
+        if (decoded.literal_size && memory_address < origin_end &&
+            memory_address + decoded.literal_size > origin_start) {
+          if (memory_address < origin_start || decoded.literal_size > origin_end - memory_address) {
+            DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+            return;
+          }
+          literal_copies.push_back(
+              {static_cast<size_t>(turbo_assembler_.pc_offset()), memory_address, decoded.literal_size, 0});
+        }
         _ Mov(TMP_REG_0, memory_address); // should we replace with `Ldr` to set  X17 ?
         if (instr & (1U << 26)) {
           if (opc == 0b11) {
@@ -189,7 +212,7 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
         }
       }
       debug_nop();
-    } else if ((instr & PCRelAddressingFixedMask) == PCRelAddressingFixed) {
+    } else if (decoded.kind == dobby::InstructionKind::Address) {
       int rd = decode_rd(instr);
 
       int64_t imm = 0;
@@ -209,7 +232,7 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
       }
       debug_nop();
 
-    } else if ((instr & UnconditionalBranchFixedMask) == UnconditionalBranchFixed) { // b xxx
+    } else if (decoded.kind == dobby::InstructionKind::Branch || decoded.kind == dobby::InstructionKind::Call) {
       addr64_t branch_address = decode_imm26_offset(instr) + curr_orig_pc;
       RelocLabelEntry *branchAddressLabel = BranchLabel(branch_address);
 
@@ -339,6 +362,17 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
   codegen.LiteralLdrBranch(curr_orig_pc);
 
   _ RelocBind();
+  // Final layout: branch pool first, then aligned snapshots of overwritten literals.
+  for (auto &literal : literal_copies) {
+    while (turbo_assembler_.pc_offset() % 16)
+      _ nop();
+    literal.pool_offset = turbo_assembler_.pc_offset();
+    turbo_assembler_.GetCodeBuffer()->EmitBuffer(static_cast<uint8_t *>(buffer) + (literal.source - origin_start),
+                                                 literal.size);
+  }
+
+  if (!turbo_assembler_.valid())
+    return;
 
   // Patch literal targets in the staging buffer before publishing any code.
   CodeBufferBase *code_buffer = turbo_assembler_.GetCodeBuffer();
@@ -350,6 +384,12 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
     code.reset(MemoryArena::AllocateCodeChunk(code_buffer->getSize()));
   if (code == nullptr)
     return;
+  for (const auto &literal : literal_copies) {
+    TurboAssembler address_encoder(nullptr);
+    address_encoder.Mov(TMP_REG_0, code->raw_instruction_start() + literal.pool_offset);
+    memcpy(static_cast<uint8_t *>(code_buffer->getRawBuffer()) + literal.mov_offset,
+           address_encoder.GetCodeBuffer()->getRawBuffer(), 16);
+  }
   auto DirectBranch = [&](size_t offset, uint64_t target, bool link) {
     const int64_t distance =
         static_cast<int64_t>(target) - static_cast<int64_t>(code->raw_instruction_start() + offset);

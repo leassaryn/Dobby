@@ -4,6 +4,9 @@
 #include "InstructionRelocation/arm/ARMInstructionRelocation.h"
 
 #include "dobby_internal.h"
+#include "InstructionRelocation/InstructionPlan.h"
+#include "UserMode/PlatformUtil/ProcessRuntimeUtility.h"
+#include <memory>
 
 #include "core/arch/arm/registers-arm.h"
 #include "core/modules/assembler/assembler-arm.h"
@@ -63,6 +66,10 @@ static void ARMRelocateSingleInstr(TurboAssembler *turbo_assembler, int32_t inst
       }
       break;
     load_literal_fix_scheme:
+      if (cond != AL || P != 1 || W || (o2 && Rt == 15)) {
+        DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+        return;
+      }
       addr32_t target_address = 0;
       if (U == 0b1)
         target_address = from_pc + imm12;
@@ -79,7 +86,10 @@ static void ARMRelocateSingleInstr(TurboAssembler *turbo_assembler, int32_t inst
         _ ldr(regRt, MemOperand(VOLATILE_REGISTER));
       } else {
         _ Ldr(regRt, pseudoDataLabel);
-        _ ldr(regRt, MemOperand(regRt));
+        if (o2)
+          _ EmitARMInst(0xe5d00000U | (Rt << 16) | (Rt << 12));
+        else
+          _ ldr(regRt, MemOperand(regRt));
       }
       // ===
       is_instr_relocated = true;
@@ -105,18 +115,22 @@ static void ARMRelocateSingleInstr(TurboAssembler *turbo_assembler, int32_t inst
           uint32_t target_address;
           int Rd = bits(instr, 12, 15);
           int imm12 = bits(instr, 0, 11);
-          int label = imm12;
+          const uint32_t expanded_immediate = std::rotr(static_cast<uint32_t>(imm12 & 255), ((imm12 >> 8) & 15) * 2);
           if (opc == 0b010 && S == 0b0 && Rn == 0b1111) {
             // ADR - A2 variant
             // add = FALSE
-            target_address = from_pc - imm12;
+            target_address = from_pc - expanded_immediate;
           } else if (opc == 0b100 && S == 0b0 && Rn == 0b1111) {
             // ADR - A1 variant
             // add = TRUE
-            target_address = from_pc + imm12;
+            target_address = from_pc + expanded_immediate;
           } else
             break;
 
+          if (cond != AL || Rd == 15) {
+            DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+            return;
+          }
           Register regRd = Register::R(Rd);
           RelocLabelEntry *pseudoDataLabel = new RelocLabelEntry(target_address);
           _ AppendRelocLabelEntry(pseudoDataLabel);
@@ -134,48 +148,23 @@ static void ARMRelocateSingleInstr(TurboAssembler *turbo_assembler, int32_t inst
     }
   }
 
-  // Branch, branch with link, and block data transfer
-  if ((op0 & 0b110) == 0b100) {
-    uint32_t cond, op0;
-    cond = bits(instr, 28, 31);
-    op0 = bit(instr, 25);
-    // Branch (immediate)
-    if (op0 == 1) {
-      uint32_t cond = 0, H = 0, imm24 = 0;
-      bool flag_link;
-      do {
-        int imm24 = bits(instr, 0, 23);
-        int label = imm24 << 2;
-        uint32_t target_address = from_pc + label;
-        if (cond != 0b1111 && H == 0) {
-          // B
-          flag_link = false;
-        } else if (cond != 0b1111 && H == 1) {
-          // BL, BLX (immediate) - A1 variant
-          flag_link = true;
-        } else if (cond == 0b1111) {
-          // BL, BLX (immediate) - A2 variant
-          flag_link = true;
-        } else
-          break;
-
-        // ===
-        // just modify orin instruction label bits, and keep the link and cond bits, the next instruction `b_imm` will
-        // do the rest work.
-        label = 0x4;
-        imm24 = label >> 2;
-        _ EmitARMInst((instr & 0xff000000) | imm24);
-        if (flag_link) {
-          _ bl(0);
-          _ b(4);
-        } else {
-          _ b(4);
-        }
-        _ ldr(pc, MemOperand(pc, -4));
-        _ EmitAddress(target_address);
-        is_instr_relocated = true;
-      } while (0);
+  if ((instr & 0x0e000000U) == 0x0a000000U) {
+    const auto condition = static_cast<Condition>(static_cast<uint32_t>(instr) >> 28);
+    if (condition == 15) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
     }
+    const bool link = instr & 0x01000000;
+    const uint32_t target = from_pc + dobby::Signed(instr & 0x00ffffff, 24) * 4;
+    auto *label = new RelocLabelEntry(target, true);
+    _ AppendRelocLabelEntry(label);
+    if (condition != AL)
+      _ b(static_cast<Condition>(condition ^ 1), link ? 4 : 0);
+    // MOV LR,PC points past the following LDR PC; flags are unchanged.
+    if (link)
+      _ mov(lr, Operand(pc));
+    _ Ldr(pc, label);
+    is_instr_relocated = true;
   }
 
   // if the instr do not needed relocate, just rewrite the origin
@@ -279,7 +268,7 @@ static void Thumb1RelocateSingleInstr(ThumbTurboAssembler *turbo_assembler, Lite
   if ((instr & 0xf800) == 0xa000) {
     rd = bits(instr, 8, 10);
     uint16_t imm8 = bits(instr, 0, 7);
-    val = from_pc + imm8;
+    val = ALIGN_FLOOR(from_pc, 4) + (imm8 << 2);
 
     ThumbRelocLabelEntry *label = new ThumbRelocLabelEntry(val, false);
     _ AppendRelocLabelEntry(label);
@@ -299,7 +288,7 @@ static void Thumb1RelocateSingleInstr(ThumbTurboAssembler *turbo_assembler, Lite
       UNREACHABLE();
     }
     uint16_t imm8 = bits(instr, 0, 7);
-    uint32_t offset = imm8 << 1;
+    int32_t offset = static_cast<int8_t>(imm8) * 2;
     val = from_pc + offset;
 
     ThumbRelocLabelEntry *label = new ThumbRelocLabelEntry(val + 1, true);
@@ -308,7 +297,7 @@ static void Thumb1RelocateSingleInstr(ThumbTurboAssembler *turbo_assembler, Lite
     // modify imm8 field
     imm8 = 0x4 >> 1;
 
-    _ EmitInt16((instr & 0xfff0) | imm8);
+    _ EmitInt16((instr & 0xff00) | imm8);
     _ t1_nop(); // manual align
     _ t2_b(4);
     _ T2_Ldr(pc, label);
@@ -341,7 +330,7 @@ static void Thumb1RelocateSingleInstr(ThumbTurboAssembler *turbo_assembler, Lite
   // unconditional branch
   if ((instr & 0xf800) == 0xe000) {
     uint16_t imm11 = bits(instr, 0, 10);
-    uint32_t offset = imm11 << 1;
+    int32_t offset = dobby::Signed(imm11, 11) * 2;
     val = from_pc + offset;
 
     ThumbRelocLabelEntry *label = new ThumbRelocLabelEntry(val + 1, true);
@@ -545,6 +534,15 @@ static void Thumb2RelocateSingleInstr(ThumbTurboAssembler *turbo_assembler, Lite
   }
 }
 
+static size_t ReadableCode(uintptr_t address) {
+  for (const auto &region : ProcessRuntimeUtility::GetProcessMemoryLayout()) {
+    const auto start = reinterpret_cast<uintptr_t>(region.address);
+    if (region.permission != kNoAccess && address >= start && address - start < region.length)
+      return region.length - (address - start);
+  }
+  return 0;
+}
+
 void gen_arm_relocate_code(LiteMutableArray *relo_map, TurboAssembler *turbo_assembler_, void *buffer,
                            AssemblyCodeChunk *origin, AssemblyCodeChunk *relocated,
                            addr32_t *execute_state_changed_pc_ptr) {
@@ -554,7 +552,8 @@ void gen_arm_relocate_code(LiteMutableArray *relo_map, TurboAssembler *turbo_ass
   addr32_t curr_relo_pc = relocated->raw_instruction_start() + ARM_PC_OFFSET + turbo_assembler_->pc_offset();
 
   addr_t buffer_cursor = (addr_t)buffer;
-  arm_inst_t instr = *(arm_inst_t *)buffer_cursor;
+  arm_inst_t instr = 0;
+  const size_t readable = ReadableCode(buffer_cursor);
 
   int predefined_relocate_size = origin->raw_instruction_size();
 
@@ -563,7 +562,22 @@ void gen_arm_relocate_code(LiteMutableArray *relo_map, TurboAssembler *turbo_ass
   while (buffer_cursor < ((addr_t)buffer + predefined_relocate_size)) {
     int last_relo_offset = turbo_assembler_->GetCodeBuffer()->getSize();
 
-    ARMRelocateSingleInstr(turbo_assembler_, instr, curr_orig_pc, curr_relo_pc, execute_state_changed_pc_ptr);
+    const size_t consumed = buffer_cursor - reinterpret_cast<uintptr_t>(buffer);
+    if (consumed > readable || readable - consumed < 4) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
+    }
+    memcpy(&instr, reinterpret_cast<void *>(buffer_cursor), 4);
+    const auto decoded = dobby::DecodeArm(instr, curr_orig_pc - ARM_PC_OFFSET);
+    if (decoded.kind == dobby::InstructionKind::Literal &&
+        decoded.target < origin->raw_instruction_start() + predefined_relocate_size &&
+        decoded.target + decoded.literal_size > origin->raw_instruction_start()) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
+    }
+    ARMRelocateSingleInstr(turbo_assembler_, instr, curr_orig_pc, curr_relo_pc, &execute_state_changed_pc);
+    if (DobbyGetLastError() != DOBBY_ERROR_NONE)
+      return;
     DLOG(0, "[arm] Relocate arm instr: 0x%x", instr);
 
     {
@@ -588,8 +602,6 @@ void gen_arm_relocate_code(LiteMutableArray *relo_map, TurboAssembler *turbo_ass
     if (execute_state_changed_pc != 0 && next_instr_addr == execute_state_changed_pc) {
       break;
     }
-
-    instr = *(arm_inst_t *)buffer_cursor;
   }
 
   // update origin
@@ -612,7 +624,8 @@ void gen_thumb_relocate_code(LiteMutableArray *relo_map, ThumbTurboAssembler *tu
   addr32_t curr_relo_pc = relocated->raw_instruction_start() + Thumb_PC_OFFSET;
 
   addr_t buffer_cursor = (addr_t)buffer;
-  thumb2_inst_t instr = *(thumb2_inst_t *)buffer_cursor;
+  thumb2_inst_t instr = 0;
+  const size_t readable_span = ReadableCode(buffer_cursor);
 
   int predefined_relocate_size = origin->raw_instruction_size();
   DLOG(0, "[arm] Thumb relocate %d start >>>>>", predefined_relocate_size);
@@ -620,8 +633,45 @@ void gen_thumb_relocate_code(LiteMutableArray *relo_map, ThumbTurboAssembler *tu
   addr32_t execute_state_changed_pc = 0;
 
   while (buffer_cursor < ((addr_t)buffer + predefined_relocate_size)) {
+    const size_t consumed = buffer_cursor - reinterpret_cast<uintptr_t>(buffer);
+    if (consumed > readable_span || readable_span - consumed < 2) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
+    }
+    instr = 0;
+    memcpy(&instr, reinterpret_cast<void *>(buffer_cursor), 2);
+    if (is_thumb2(instr)) {
+      if (readable_span - consumed < 4) {
+        DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+        return;
+      }
+      memcpy(&instr, reinterpret_cast<void *>(buffer_cursor), 4);
+    }
+    if ((instr & 0xff00) == 0xbf00 && (instr & 15)) {
+      const size_t readable = readable_span - consumed;
+      const size_t block_size = dobby::ThumbItSize(reinterpret_cast<void *>(buffer_cursor), readable);
+      if (!block_size) {
+        DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+        return;
+      }
+      auto *map = new ReloMapEntry{curr_orig_pc - Thumb_PC_OFFSET, static_cast<addr32_t>(turbo_assembler_->pc_offset()),
+                                   static_cast<int>(block_size)};
+      relo_map->pushObject(reinterpret_cast<LiteObject *>(map));
+      turbo_assembler_->GetCodeBuffer()->EmitBuffer(reinterpret_cast<void *>(buffer_cursor), block_size);
+      curr_orig_pc += block_size;
+      buffer_cursor += block_size;
+      curr_relo_pc = relocated->raw_instruction_start() + Thumb_PC_OFFSET + turbo_assembler_->pc_offset();
+      continue;
+    }
     // UDF/SVC are not conditional branches; reject before the branch rewriter.
-    if (!is_thumb2(instr) && ((instr & 0xff00) == 0xde00 || (instr & 0xff00) == 0xdf00)) {
+    if (dobby::DecodeThumb(instr, curr_orig_pc - Thumb_PC_OFFSET).kind == dobby::InstructionKind::Unsupported) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
+    }
+    const auto decoded = dobby::DecodeThumb(instr, curr_orig_pc - Thumb_PC_OFFSET);
+    if (decoded.kind == dobby::InstructionKind::Literal &&
+        decoded.target < origin->raw_instruction_start() + predefined_relocate_size &&
+        decoded.target + decoded.literal_size > origin->raw_instruction_start()) {
       DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
       return;
     }
@@ -668,8 +718,6 @@ void gen_thumb_relocate_code(LiteMutableArray *relo_map, ThumbTurboAssembler *tu
     if (execute_state_changed_pc != 0 && next_instr_addr == execute_state_changed_pc) {
       break;
     }
-
-    instr = *(thumb2_inst_t *)buffer_cursor;
   }
 
   // update origin
@@ -696,10 +744,10 @@ static addr32_t get_orig_instr_relocated_addr(LiteMutableArray *relo_map, addr32
       return relo_entry->relocated_instr;
     }
   }
-  return 0;
+  return UINT32_MAX;
 }
 
-static void reloc_label_fixup(AssemblyCodeChunk *origin, LiteMutableArray *relo_map,
+static bool reloc_label_fixup(AssemblyCodeChunk *origin, LiteMutableArray *relo_map,
                               ThumbTurboAssembler *thumb_turbo_assembler, TurboAssembler *arm_turbo_assembler) {
   addr32_t origin_instr_start = origin->raw_instruction_start();
   addr32_t origin_instr_end = origin_instr_start + origin->raw_instruction_size();
@@ -715,9 +763,13 @@ static void reloc_label_fixup(AssemblyCodeChunk *origin, LiteMutableArray *relo_
 
       if (val >= origin_instr_start && val < origin_instr_end) {
         DLOG(0, "[reloc label fixup warning] found thumb instr branch / access in origin code range");
-        addr32_t fixup_val = get_orig_instr_relocated_addr(relo_map, val);
+        addr32_t fixup_val = get_orig_instr_relocated_addr(relo_map, val & ~addr32_t{1});
+        if (fixup_val == UINT32_MAX) {
+          DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+          return false;
+        }
         fixup_val += (addr_t)thumb_turbo_assembler->GetRealizedAddress();
-        label->fixup_data(fixup_val);
+        label->fixup_data(fixup_val | (val & 1));
         thumb_turbo_assembler->RelocBindFixup(label);
       }
     }
@@ -727,25 +779,32 @@ static void reloc_label_fixup(AssemblyCodeChunk *origin, LiteMutableArray *relo_
   if (labels) {
     for (size_t i = 0; i < labels->getCount(); i++) {
       RelocLabelEntry *label = (RelocLabelEntry *)labels->getObject(i);
+      if (!label->used_for_branch())
+        continue;
       addr32_t val = label->data();
 
       if (val >= origin_instr_start && val < origin_instr_end) {
         DLOG(0, "[reloc label fixup warning]found thumb instr branch / access in origin code range");
         addr32_t fixup_val = get_orig_instr_relocated_addr(relo_map, val);
+        if (fixup_val == UINT32_MAX) {
+          DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+          return false;
+        }
         fixup_val += (addr_t)arm_turbo_assembler->GetRealizedAddress();
         label->fixup_data(fixup_val);
         arm_turbo_assembler->RelocBindFixup(label);
       }
     }
   }
+  return true;
 }
 
 void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyCodeChunk *relocated) {
-  CodeBuffer *code_buffer = new CodeBuffer(64);
+  auto code_buffer = std::make_unique<CodeBuffer>(64);
 
-  ThumbTurboAssembler thumb_turbo_assembler_(0, code_buffer);
+  ThumbTurboAssembler thumb_turbo_assembler_(0, code_buffer.get());
 #define thumb_ thumb_turbo_assembler_.
-  TurboAssembler arm_turbo_assembler_(0, code_buffer);
+  TurboAssembler arm_turbo_assembler_(0, code_buffer.get());
 #define arm_ arm_turbo_assembler_.
 
   Assembler *curr_assembler_ = NULL;
@@ -759,6 +818,17 @@ void GenRelocateCodeAndBranch(void *buffer, AssemblyCodeChunk *origin, AssemblyC
   }
 
   LiteMutableArray relo_map(8);
+  struct Cleanup {
+    ThumbTurboAssembler &thumb;
+    TurboAssembler &arm;
+    LiteMutableArray &map;
+    ~Cleanup() {
+      thumb.ClearCodeBuffer();
+      arm.ClearCodeBuffer();
+      for (size_t i = 0; i < map.getCount(); ++i)
+        delete reinterpret_cast<ReloMapEntry *>(map.getObject(i));
+    }
+  } cleanup{thumb_turbo_assembler_, arm_turbo_assembler_, relo_map};
 
 relocate_remain:
   addr32_t execute_state_changed_pc = 0;
@@ -778,9 +848,6 @@ relocate_remain:
     if (DobbyGetLastError() != DOBBY_ERROR_NONE) {
       thumb_turbo_assembler_.ClearCodeBuffer();
       arm_turbo_assembler_.ClearCodeBuffer();
-      delete code_buffer;
-      for (size_t i = 0; i < relo_map.getCount(); ++i)
-        delete reinterpret_cast<ReloMapEntry *>(relo_map.getObject(i));
       return;
     }
     if (thumb_turbo_assembler_.GetExecuteState() == ARMExecuteState) {
@@ -806,6 +873,8 @@ relocate_remain:
 
     gen_arm_relocate_code(&relo_map, &arm_turbo_assembler_, buffer, &origin_chunk, relocated,
                           &execute_state_changed_pc);
+    if (DobbyGetLastError() != DOBBY_ERROR_NONE)
+      return;
     if (arm_turbo_assembler_.GetExecuteState() == ThumbExecuteState) {
       // relocate interrupt as execute state changed
       if (execute_state_changed_pc < origin_chunk.raw_instruction_start() + origin_chunk.raw_instruction_size()) {
@@ -825,6 +894,7 @@ relocate_remain:
   // TODO:
   // if last instr is unlink branch, skip
   addr32_t rest_instr_addr = origin_chunk.raw_instruction_start() + origin_chunk.raw_instruction_size();
+  origin->re_init_region_range(origin->raw_instruction_start(), rest_instr_addr - origin->raw_instruction_start());
   if (curr_assembler_ == &thumb_turbo_assembler_) {
     // Branch to the rest of instructions
     thumb_ AlignThumbNop();
@@ -856,7 +926,10 @@ relocate_remain:
     arm_turbo_assembler_.SetRealizedAddress(cchunk->address);
 
     // fixup the instr branch into trampoline(has been modified)
-    reloc_label_fixup(origin, &relo_map, &thumb_turbo_assembler_, &arm_turbo_assembler_);
+    if (!reloc_label_fixup(origin, &relo_map, &thumb_turbo_assembler_, &arm_turbo_assembler_)) {
+      delete cchunk;
+      return;
+    }
 
     AssemblyCodeChunk *code = NULL;
     code = AssemblyCodeBuilder::FinalizeFromTurboAssembler(curr_assembler_);
@@ -878,8 +951,6 @@ relocate_remain:
   {
     thumb_turbo_assembler_.ClearCodeBuffer();
     arm_turbo_assembler_.ClearCodeBuffer();
-
-    delete code_buffer;
   }
 }
 

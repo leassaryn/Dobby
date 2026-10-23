@@ -160,6 +160,8 @@ void FailedRestore() {
   memory.Write(0, {seven, ret});
   memory.Write(128, {forty_two, ret});
   CHECK(DobbyHook(memory.data, memory.data + 128, nullptr) == RS_SUCCESS);
+  std::array<uint8_t, 8> installed{};
+  std::memcpy(installed.data(), memory.data, installed.size());
   FILE *file = tmpfile();
   if (!file)
     std::abort();
@@ -176,6 +178,11 @@ void FailedRestore() {
   CHECK(mmap(memory.data, memory.size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1,
              0) == memory.data);
   memory.Write(0, {forty_two, ret});
+  CHECK(DobbyDestroy(memory.data) == RS_FAILED && DobbyGetLastError() == DOBBY_ERROR_CONFLICT);
+  CHECK(Count() == 1);
+  std::memcpy(memory.data, installed.data(), installed.size());
+  __builtin___clear_cache(reinterpret_cast<char *>(memory.data),
+                          reinterpret_cast<char *>(memory.data) + installed.size());
   CHECK(DobbyDestroy(memory.data) == RS_SUCCESS);
   CHECK(reinterpret_cast<Function>(memory.data)(0) == 7);
   CHECK(Count() == 0);

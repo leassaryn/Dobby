@@ -11,6 +11,10 @@ AssemblyCodeChunk *AssemblyCodeBuilder::FinalizeFromAddress(addr_t address, int 
 }
 
 AssemblyCodeChunk *AssemblyCodeBuilder::FinalizeFromTurboAssembler(AssemblerBase *assembler) {
+  if (!assembler->valid()) {
+    DobbySetError(DOBBY_ERROR_INVALID_ENCODING);
+    return nullptr;
+  }
   AssemblyCodeChunk *result = NULL;
 
   CodeBufferBase *buffer = NULL;

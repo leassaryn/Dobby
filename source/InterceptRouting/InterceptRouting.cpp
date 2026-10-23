@@ -2,6 +2,7 @@
 
 #include "InterceptRouting/InterceptRouting.h"
 #include "InterceptRouting/RoutingPlugin/RoutingPlugin.h"
+#include "HookLifecycle.h"
 
 using namespace zz;
 
@@ -166,9 +167,17 @@ bool InterceptRouting::Active() {
   void *patch_address = NULL;
   patch_address = (void *)origin_->raw_instruction_start();
 
+  PatchScope patch(patch_address, origin_->raw_instruction_size(), DOBBY_PATCH_INSTALL);
+  if (!patch.ready())
+    return false;
+  if (memcmp(patch_address, entry_->origin_chunk_.chunk_buffer, origin_->raw_instruction_size()) != 0) {
+    DobbySetError(DOBBY_ERROR_CONFLICT);
+    return false;
+  }
   if (CodePatch(patch_address, (uint8_t *)trampoline_buffer_->getRawBuffer(), trampoline_buffer_->getSize()) !=
       kMemoryOperationSuccess)
     return false;
+  patch.Applied();
   entry_->is_committed = true;
   DLOG(0, "[intercept routing] Active patch %p", patch_address);
   return true;

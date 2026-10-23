@@ -32,6 +32,8 @@ PUBLIC int DobbyGetLastSystemError(void) {
 
 PUBLIC const char *DobbyGetErrorMessage(DobbyError error) {
   switch (error) {
+  case DOBBY_ERROR_INVALID_ENCODING:
+    return "operand cannot be encoded without loss";
   case DOBBY_ERROR_PATCH_LIMIT:
     return "patch exceeds caller byte limit";
   case DOBBY_ERROR_UNSUPPORTED_FORMAT:

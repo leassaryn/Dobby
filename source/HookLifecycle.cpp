@@ -30,6 +30,8 @@ void RetireHook(HookEntry *entry) {
 }
 
 PUBLIC int DobbyCollectRetiredHooks(size_t *released_count) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
   if (released_count)
@@ -69,6 +71,8 @@ PUBLIC int DobbyGetResourceStats(DobbyResourceStats *stats) {
 }
 
 PUBLIC int DobbyReleaseCodeMemory(size_t *released_bytes) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
   if (released_bytes)
@@ -95,4 +99,56 @@ PUBLIC int DobbyReleaseCodeMemory(size_t *released_bytes) {
   if (!success)
     return DobbyFailure(DOBBY_ERROR_MEMORY_RELEASE_FAILED, errno);
   return DobbySuccess();
+}
+
+namespace {
+DobbyPatchCoordinator patch_coordinator{};
+thread_local bool in_patch_coordinator = false;
+} // namespace
+PUBLIC int DobbySetPatchCoordinator(const DobbyPatchCoordinator *coordinator) {
+  HookOperationGuard guard;
+  if (in_patch_coordinator)
+    return DobbyFailure(DOBBY_ERROR_BUSY);
+  if (coordinator && (coordinator->struct_size < sizeof(*coordinator) ||
+                      coordinator->api_version != DOBBY_API_VERSION || !coordinator->enter || !coordinator->leave))
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+  patch_coordinator = coordinator ? *coordinator : DobbyPatchCoordinator{};
+  DobbySetError(DOBBY_ERROR_NONE);
+  return RS_SUCCESS;
+}
+PatchScope::PatchScope(void *address, size_t size, DobbyPatchOperation operation)
+    : address_(address), size_(size), operation_(operation), coordinator_(patch_coordinator) {
+  if (in_patch_coordinator) {
+    DobbySetError(DOBBY_ERROR_BUSY);
+    return;
+  }
+  if (!coordinator_.enter) {
+    ready_ = true;
+    return;
+  }
+  in_patch_coordinator = true;
+  entered_ = coordinator_.enter(address_, size_, operation_, coordinator_.userdata) == RS_SUCCESS;
+  ready_ = entered_;
+  if (!entered_) {
+    in_patch_coordinator = false;
+    DobbySetError(DOBBY_ERROR_BUSY);
+  }
+}
+PatchScope::~PatchScope() {
+  if (!entered_)
+    return;
+  const auto error = DobbyGetLastError();
+  const auto system_error = DobbyGetLastSystemError();
+  coordinator_.leave(address_, size_, operation_, applied_, coordinator_.userdata);
+  in_patch_coordinator = false;
+  DobbySetError(error, system_error);
+}
+
+bool DobbyInPatchCoordinator() {
+  return in_patch_coordinator;
+}
+bool DobbyCoordinatorUsesRange(uintptr_t start, size_t size) {
+  const uintptr_t enter = reinterpret_cast<uintptr_t>(patch_coordinator.enter) & ~uintptr_t{1};
+  const uintptr_t leave = reinterpret_cast<uintptr_t>(patch_coordinator.leave) & ~uintptr_t{1};
+  return (enter >= start && enter - start < size) || (leave >= start && leave - start < size);
 }

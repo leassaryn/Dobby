@@ -106,10 +106,13 @@ protected:
 // reloc
 class RelocLabelEntry : public PseudoLabel {
 public:
-  explicit RelocLabelEntry(uint32_t data) : data_size_(0) {
+  explicit RelocLabelEntry(uint32_t data, bool branch = false) : branch_(branch), data_size_(0) {
     data_ = data;
   }
 
+  bool used_for_branch() const {
+    return branch_;
+  }
   uint32_t data() {
     return data_;
   }
@@ -120,6 +123,7 @@ public:
 
 private:
   uint32_t data_;
+  bool branch_;
 
   int data_size_;
 };
@@ -365,6 +369,8 @@ public:
     b(AL, branch_offset);
   }
   void b(Condition cond, int branch_offset) {
+    if (!CheckEncoding(branch_offset % 4 == 0 && branch_offset >= -(1 << 25) && branch_offset < (1 << 25)))
+      return;
     uint32_t encoding = 0xa000000;
     encoding |= (cond << kConditionShift);
     uint32_t imm24 = bits(branch_offset >> 2, 0, 23);
@@ -376,6 +382,8 @@ public:
     bl(AL, branch_offset);
   }
   void bl(Condition cond, int branch_offset) {
+    if (!CheckEncoding(branch_offset % 4 == 0 && branch_offset >= -(1 << 25) && branch_offset < (1 << 25)))
+      return;
     uint32_t encoding = 0xb000000;
     encoding |= (cond << kConditionShift);
     uint32_t imm24 = bits(branch_offset >> 2, 0, 23);
@@ -435,7 +443,7 @@ public:
     bl(0);
     b(4);
     ldr(pc, MemOperand(pc, -4));
-    buffer_->Emit32((uint32_t)function.address());
+    buffer_->Emit32(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(function.address())));
   }
 
   void Move32Immeidate(Register rd, const Operand &x, Condition cond = AL) {

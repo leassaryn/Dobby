@@ -14,6 +14,8 @@ PUBLIC int DobbyHook(void *address, void *replace_call, void **origin_call) {
 }
 
 static int Prepare(void *address, void *replace_call, void **origin_call, int near_policy, size_t max_patch_bytes) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
   if (!address || !replace_call) {
@@ -81,6 +83,8 @@ static int Prepare(void *address, void *replace_call, void **origin_call, int ne
 }
 
 PUBLIC int DobbyCommit(void *address) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
   if (!address) {

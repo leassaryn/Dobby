@@ -167,3 +167,8 @@ The optional native emulator configuration also builds the x86/x64 relocation
 tests. Run CTest for the fixed corpus and use `--cases`/`--seed`/`--replay` on the
 ARM64 executable for reproducible fuzzing; see its README. These dependencies
 remain absent from production library linkage.
+
+
+The optional emulator configuration now also requires Python and `llvm-mc` for
+the ARM64 encoding oracle, and builds an ARM/Thumb guest test. Production library
+linkage is unchanged. See [engine contracts and coverage](engine.md).

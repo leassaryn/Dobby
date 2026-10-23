@@ -152,7 +152,8 @@ typedef enum {
   DOBBY_ERROR_MEMORY_RELEASE_FAILED,
   DOBBY_ERROR_PATCH_LIMIT,
   DOBBY_ERROR_UNSUPPORTED_FORMAT,
-  DOBBY_ERROR_ROLLBACK_FAILED
+  DOBBY_ERROR_ROLLBACK_FAILED,
+  DOBBY_ERROR_INVALID_ENCODING
 } DobbyError;
 DobbyError DobbyGetLastError(void);
 int DobbyGetLastSystemError(void);                  // captured errno, or zero
@@ -238,6 +239,48 @@ typedef struct {
 #define DOBBY_FEATURE_IMPORT_HOOK (UINT64_C(1) << 2)
 int DobbyGetRuntimeInfo(DobbyRuntimeInfo *info);
 
+typedef enum { DOBBY_ROUTE_DIRECT, DOBBY_ROUTE_RELAY_CANDIDATE, DOBBY_ROUTE_LONG } DobbyRouteKind;
+typedef enum {
+  DOBBY_INSN_COPY,
+  DOBBY_INSN_BRANCH,
+  DOBBY_INSN_CALL,
+  DOBBY_INSN_CONDITIONAL,
+  DOBBY_INSN_LITERAL,
+  DOBBY_INSN_ADDRESS,
+  DOBBY_INSN_TERMINAL,
+  DOBBY_INSN_UNSUPPORTED,
+  DOBBY_INSN_IT_BLOCK
+} DobbyInstructionKind;
+typedef struct {
+  uintptr_t address, referenced_address;
+  uint64_t registers_read, registers_written; // GPR masks only; zero does not mean no effects
+  uint32_t kind;
+  uint8_t size, literal_size, register_effects_known;
+} DobbyInstructionInfo;
+typedef struct {
+  size_t struct_size;
+  uint32_t api_version;
+  DobbyRouteKind route;
+  size_t patch_span, preserved_prefix, instruction_count;
+  DobbyError reason;
+  DobbyInstructionInfo instructions[64];
+} DobbyTargetAnalysis;
+// Read-only estimate: no executable allocation or registry mutation. Relay availability
+// and successful relocation are established only by Prepare. Unknown effects are explicit.
+int DobbyAnalyzeTarget(void *target, void *replacement, const DobbyHookOptions *options, DobbyTargetAnalysis *analysis);
+
+// Application-owned quiescence. Callbacks must not throw or reenter management APIs.
+typedef enum { DOBBY_PATCH_INSTALL, DOBBY_PATCH_REMOVE, DOBBY_PATCH_IMPORT } DobbyPatchOperation;
+typedef struct {
+  size_t struct_size;
+  uint32_t api_version;
+  int (*enter)(void *address, size_t size, DobbyPatchOperation operation, void *userdata);
+  void (*leave)(void *address, size_t size, DobbyPatchOperation operation, int applied, void *userdata);
+  void *userdata;
+} DobbyPatchCoordinator;
+// NULL clears it. Caller owns callback code/userdata lifetime until cleared.
+int DobbySetPatchCoordinator(const DobbyPatchCoordinator *coordinator);
+
 typedef uint64_t DobbyModuleHandle;
 typedef struct {
   size_t struct_size;
@@ -254,6 +297,26 @@ typedef uint64_t DobbyImportHandle;
 // Hooks matching JUMP_SLOT entries in one pinned importing ELF module.
 // Standard REL/RELA PLT tables only. Full RELRO permissions are restored.
 int DobbyHookImport(const char *image_name, const char *symbol, void *replacement, DobbyImportHandle *handle);
+#define DOBBY_IMPORT_PLT 1u
+#define DOBBY_IMPORT_GLOB_DAT 2u
+typedef struct {
+  size_t struct_size;
+  uint32_t api_version;
+  const char *symbol_version; // NULL matches any version
+  uint32_t flags;
+} DobbyImportOptions;
+typedef struct {
+  void *slot, *current, *original;
+  DobbyImportHandle owner;
+  uint32_t relocation_type;
+  uint16_t version_index;
+  int conflict;
+} DobbyImportSlotInfo;
+int DobbyHookImportEx(const char *image_name, const char *symbol, void *replacement, const DobbyImportOptions *options,
+                      DobbyImportHandle *handle);
+// NULL slots/capacity=0 queries count. Addresses remain valid only while the module is pinned.
+int DobbyInspectImport(const char *image_name, const char *symbol, const DobbyImportOptions *options,
+                       DobbyImportSlotInfo *slots, size_t capacity, size_t *count);
 int DobbyDestroyImport(DobbyImportHandle handle);
 int DobbyGetImportOriginal(DobbyImportHandle handle, void **original);
 

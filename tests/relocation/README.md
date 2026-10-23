@@ -37,7 +37,7 @@ cannot start. This native development build is separate from NDK release builds.
 
 ## What is checked
 
-29 ARM64 fixtures each run with 16 initial states (464 comparisons per placement):
+30 ARM64 fixtures each run with 16 initial states (480 comparisons per placement):
 
 - Arithmetic and writes; SP and stack-pair save/restore.
 - Internal forward/backward branches, B/BL, CBZ/CBNZ, TBZ/TBNZ and conditional
@@ -103,3 +103,19 @@ seed and instruction words. Replay validates the artifact and reruns all 16
 states (including the recorded failing state); use the same near/far build.
 Instruction/time budgets prevent generated loops from hanging the run. The
 artifact is emitted when a fixture fails; setup/argument errors have no fixture.
+
+
+## ARM/Thumb and LLVM assembler oracle
+
+CTest also builds the actual ARM relocator with a test-only architecture override.
+Its allocator uses a reserved low-address test mapping so 32-bit guest pointers
+remain representable. Capstone checks executed instructions and Unicorn compares
+GPRs, CPSR and stack for ARM/Thumb arithmetic, literal loads, backward branches,
+Thumb ADR and whole supported IT blocks. Overwritten bytes are poisoned, and
+unsupported IT members are explicitly rejected. This does not emulate every ARM
+extension or replace native ARM32 device tests.
+
+`dobby_assembler_llvm` compares 6,151 ARM64 encodings against `llvm-mc` and checks
+invalid operands/finalization failure. Install LLVM's `llvm-mc` alongside the
+existing test dependencies. No LLVM code is linked into the production library.
+See [the engine guide](../../docs/engine.md) for exact coverage and contracts.

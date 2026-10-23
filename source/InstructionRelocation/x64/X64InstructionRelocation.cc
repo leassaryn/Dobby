@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include "InstructionRelocation/x86/RelocationFixups.h"
+#include "InstructionRelocation/x86/InstructionPlanX86.h"
 
 #include "dobby_internal.h"
 #include "MemoryAllocator/NearMemoryArena.h"
@@ -46,7 +47,8 @@ static int GenRelocateCodeFixed(void *buffer, AssemblyCodeChunk *origin, Assembl
       return RT_FAILED;
     }
     x86_insn_decode_bounded(&insn, reinterpret_cast<uint8_t *>(buffer_cursor), available, &conf);
-    if (!insn.length || insn.unsupported) {
+    const auto semantic = dobby::ClassifyX86(insn, reinterpret_cast<void *>(buffer_cursor), curr_orig_ip);
+    if (semantic.kind == dobby::InstructionKind::Unsupported) {
       DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
       return RT_FAILED;
     }
@@ -61,9 +63,7 @@ static int GenRelocateCodeFixed(void *buffer, AssemblyCodeChunk *origin, Assembl
         DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
         return RT_FAILED;
       }
-      const int64_t displacement =
-          short_cond || short_jump ? static_cast<int8_t>(insn.immediate) : static_cast<int32_t>(insn.immediate);
-      const uint64_t target = curr_orig_ip + insn.length + displacement;
+      const uint64_t target = semantic.target;
       if (short_cond || near_cond) {
         __ Emit8(0x0f);
         __ Emit8(0x80 | (opcode & 15));

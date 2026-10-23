@@ -11,6 +11,16 @@ int main(void) {
       .struct_size = sizeof(DobbyHookOptions), .api_version = DOBBY_API_VERSION, .near_policy = DOBBY_NEAR_AUTO};
   if (DobbyPrepareEx(NULL, NULL, NULL, &options) != RS_FAILED)
     return 3;
+  DobbyTargetAnalysis analysis = {.struct_size = sizeof(analysis), .api_version = DOBBY_API_VERSION};
+  if (DobbyAnalyzeTarget(NULL, NULL, NULL, &analysis) != RS_FAILED)
+    return 4;
+  if (DobbySetPatchCoordinator(NULL) != RS_SUCCESS)
+    return 5;
+  DobbyImportOptions imports = {
+      .struct_size = sizeof(imports), .api_version = DOBBY_API_VERSION, .flags = DOBBY_IMPORT_GLOB_DAT};
+  size_t count = 0;
+  if (DobbyInspectImport(NULL, NULL, &imports, NULL, 0, &count) != RS_FAILED)
+    return 6;
   DobbyResourceStats stats = {.struct_size = sizeof(DobbyResourceStats)};
   return DobbyGetResourceStats(&stats) == RS_SUCCESS ? 0 : 1;
 }

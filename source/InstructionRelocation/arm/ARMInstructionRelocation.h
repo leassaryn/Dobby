@@ -221,8 +221,8 @@ private:
   // =====
   void EmitThumb2Branch(Condition cond, int32_t imm, bool link) {
     uint32_t operand = imm >> 1;
-    ASSERT(CheckSignLength(operand, 25));
-    ASSERT(CheckAlign(operand, 2));
+    if (!CheckEncoding(cond == AL && imm % 2 == 0 && imm >= -(1 << 24) && imm < (1 << 24)))
+      return;
 
     uint32_t signbit = (imm >> 31) & 0x1;
     uint32_t i1 = (operand >> 22) & 0x1;
@@ -262,7 +262,7 @@ public:
   ~ThumbTurboAssembler() {
     if (data_labels_) {
       for (size_t i = 0; i < data_labels_->getCount(); i++) {
-        RelocLabelEntry *label = (RelocLabelEntry *)data_labels_->getObject(i);
+        auto *label = reinterpret_cast<ThumbRelocLabelEntry *>(data_labels_->getObject(i));
         delete label;
       }
 
@@ -299,7 +299,8 @@ public:
   }
 
   void AlignThumbNop() {
-    addr32_t pc = this->GetCodeBuffer()->getSize() + (addr32_t)GetRealizedAddress();
+    addr32_t pc =
+        this->GetCodeBuffer()->getSize() + static_cast<addr32_t>(reinterpret_cast<uintptr_t>(GetRealizedAddress()));
     if (pc % Thumb2_INST_LEN) {
       t1_nop();
     } else {

@@ -4,6 +4,8 @@
 #include "InterceptRouting/Routing/DynamicBinaryInstrument/dynamic-binary-instrument.h"
 
 PUBLIC int DobbyInstrument(void *address, DBICallTy handler) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
   if (!address || !handler) {

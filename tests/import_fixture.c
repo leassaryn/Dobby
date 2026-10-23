@@ -7,3 +7,7 @@ __attribute__((visibility("default"))) void dobby_test_module_callback(const cha
   (void)name;
   (void)handle;
 }
+
+__attribute__((visibility("default"))) void *dobby_test_import_address(void) {
+  return (void *)getppid;
+}

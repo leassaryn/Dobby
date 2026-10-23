@@ -27,6 +27,9 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+bool DobbyInPatchCoordinator();
+bool DobbyCoordinatorUsesRange(uintptr_t start, size_t size);
+
 typedef struct _AssemblyCodeChunkBuffer {
   AssemblyCodeChunk chunk;
   uint8_t chunk_buffer[64];

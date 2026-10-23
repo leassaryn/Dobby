@@ -196,8 +196,9 @@ pointers after a failed batch, then collect retired resources at a safe point.
 `DobbyHookImport(importing_image, symbol, replacement, &handle)` patches matching
 standard ELF PLT `JUMP_SLOT` entries (REL or RELA) in one already loaded importing
 module. It supports full RELRO by temporarily changing permissions and restoring
-them. This backend does not rewrite the provider's function body. It does not
-implement non-PLT `GLOB_DAT`, packed relocation tables or symbol-version selection.
+them. This backend does not rewrite the provider's function body. The legacy API selects PLT entries. `DobbyHookImportEx` additionally supports
+standard-table `GLOB_DAT` and imported symbol-version selection. Packed relocation
+tables remain unsupported.
 Missing imports fail rather than falling back to inline hooking. The table format
 follows [Bionic's ELF relocation handling](https://android.googlesource.com/platform/bionic/+/bcc04d0069a919a6ac4a2b378e15dd0a50c46aec/linker/linker.cpp).
 
@@ -235,3 +236,7 @@ explicit collection only when the application can prove quiescence. Automatic
 ARM64 near routing is now the default; tests relying on a long patch can disable
 it explicitly. Use the exported CMake target instead of copying internal include
 directories or depending on private headers.
+
+
+See [the engine guide](engine.md) for checked encoding, target analysis, patch
+coordination, supported Thumb IT blocks and import-slot inspection.

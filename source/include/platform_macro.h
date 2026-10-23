@@ -1,7 +1,9 @@
 #pragma once
 
 // Test-only cross-ISA generators: never enabled on the production library.
-#if defined(DOBBY_TEST_TARGET_X64)
+#if defined(DOBBY_TEST_TARGET_ARM)
+#define TARGET_ARCH_ARM 1
+#elif defined(DOBBY_TEST_TARGET_X64)
 #define TARGET_ARCH_X64 1
 #elif defined(DOBBY_TEST_TARGET_IA32)
 #define TARGET_ARCH_IA32 1

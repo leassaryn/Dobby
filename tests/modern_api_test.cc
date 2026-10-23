@@ -57,6 +57,59 @@ struct Code {
     munmap(memory, size);
   }
 };
+struct Coordination {
+  int entered = 0, left = 0, applied = 0;
+  bool allow = true;
+};
+int Enter(void *address, size_t, DobbyPatchOperation, void *data) {
+  auto &c = *static_cast<Coordination *>(data);
+  ++c.entered;
+  CHECK(DobbyDestroy(address) == RS_FAILED && DobbyGetLastError() == DOBBY_ERROR_BUSY);
+  return c.allow ? RS_SUCCESS : RS_FAILED;
+}
+void Leave(void *, size_t, DobbyPatchOperation, int applied, void *data) {
+  auto &c = *static_cast<Coordination *>(data);
+  ++c.left;
+  c.applied += applied;
+}
+void AnalysisAndCoordination() {
+  Code code;
+  DobbyResourceStats before{}, after{};
+  before.struct_size = sizeof(before);
+  after.struct_size = sizeof(after);
+  CHECK(DobbyGetResourceStats(&before) == RS_SUCCESS);
+  DobbyTargetAnalysis analysis{sizeof(analysis), DOBBY_API_VERSION};
+  CHECK(DobbyAnalyzeTarget(code.memory, reinterpret_cast<void *>(Replacement), nullptr, &analysis) == RS_SUCCESS);
+  CHECK(analysis.patch_span > 0 && analysis.instruction_count > 0);
+  CHECK(DobbyGetResourceStats(&after) == RS_SUCCESS);
+  CHECK(before.registered_hooks == after.registered_hooks && before.retained_code_bytes == after.retained_code_bytes);
+  DobbyHookOptions limit{sizeof(limit), DOBBY_API_VERSION, DOBBY_NEAR_AUTO, 1};
+  CHECK(DobbyAnalyzeTarget(code.memory, reinterpret_cast<void *>(Replacement), &limit, &analysis) == RS_FAILED);
+  CHECK(analysis.reason == DOBBY_ERROR_PATCH_LIMIT);
+  CHECK(DobbyAnalyzeTarget(reinterpret_cast<void *>(1), reinterpret_cast<void *>(Replacement), nullptr, &analysis) ==
+        RS_FAILED);
+  Coordination c;
+  DobbyPatchCoordinator coordinator{sizeof(coordinator), DOBBY_API_VERSION, Enter, Leave, &c};
+  CHECK(DobbySetPatchCoordinator(&coordinator) == RS_SUCCESS);
+  CHECK(DobbyPrepareEx(code.memory, reinterpret_cast<void *>(Replacement), nullptr, nullptr) == RS_SUCCESS);
+  CHECK(c.entered == 0);
+  auto *byte = static_cast<unsigned char *>(code.memory);
+  const auto saved = *byte;
+  *byte ^= 1;
+  CHECK(DobbyCommit(code.memory) == RS_FAILED && DobbyGetLastError() == DOBBY_ERROR_CONFLICT);
+  CHECK(c.entered == 1 && c.left == 1 && c.applied == 0);
+  *byte = saved;
+  c.allow = false;
+  CHECK(DobbyCommit(code.memory) == RS_FAILED && DobbyGetLastError() == DOBBY_ERROR_BUSY);
+  CHECK(c.entered == 2 && c.left == 1);
+  c.allow = true;
+  CHECK(DobbyCommit(code.memory) == RS_SUCCESS);
+  CHECK(reinterpret_cast<Fn>(code.memory)() == 4242);
+  CHECK(DobbyDestroy(code.memory) == RS_SUCCESS);
+  CHECK(c.entered == 4 && c.left == 3 && c.applied == 2);
+  CHECK(DobbySetPatchCoordinator(nullptr) == RS_SUCCESS);
+  CHECK(DobbyReleaseCodeMemory(nullptr) == RS_SUCCESS);
+}
 void OptionsAndBatch() {
   Code a, b;
   DobbyHookOptions limited{sizeof(limited), DOBBY_API_VERSION, DOBBY_NEAR_AUTO, 1};
@@ -171,6 +224,29 @@ void Imports(const char *executable) {
   CHECK(DobbyStopImageLoadMonitor() == RS_SUCCESS);
   CHECK(DobbyReleaseCodeMemory(nullptr) == RS_SUCCESS);
 #endif
+  auto get_address = reinterpret_cast<void *(*)()>(dlsym(library, "dobby_test_import_address"));
+  CHECK(get_address);
+  if (get_address) {
+    DobbyImportOptions options{sizeof(options), DOBBY_API_VERSION, "LIBC", DOBBY_IMPORT_GLOB_DAT};
+    size_t count = 0;
+    CHECK(DobbyInspectImport("libdobby_test_importer.so", "getppid", &options, nullptr, 0, &count) == RS_SUCCESS);
+    CHECK(count == 1);
+    DobbyImportSlotInfo slot{};
+    CHECK(DobbyInspectImport("libdobby_test_importer.so", "getppid", &options, &slot, 1, &count) == RS_SUCCESS);
+    CHECK(!slot.owner && slot.current == get_address());
+    options.symbol_version = "DOBBY_MISSING_VERSION";
+    CHECK(DobbyInspectImport("libdobby_test_importer.so", "getppid", &options, &slot, 1, &count) == RS_FAILED);
+    CHECK(DobbyGetLastError() == DOBBY_ERROR_NOT_FOUND);
+    options.symbol_version = "LIBC";
+    DobbyImportHandle handle = 0;
+    CHECK(DobbyHookImportEx("libdobby_test_importer.so", "getppid", reinterpret_cast<void *>(Replacement), &options,
+                            &handle) == RS_SUCCESS);
+    CHECK(get_address() == reinterpret_cast<void *>(Replacement));
+    CHECK(DobbyInspectImport("libdobby_test_importer.so", "getppid", &options, &slot, 1, &count) == RS_SUCCESS);
+    CHECK(slot.owner == handle && !slot.conflict && reinterpret_cast<Fn>(slot.original)() == getppid());
+    CHECK(DobbyDestroyImport(handle) == RS_SUCCESS);
+    CHECK(reinterpret_cast<Fn>(get_address())() == getppid());
+  }
   dlclose(library); // the module handle now owns the remaining pin
   CHECK(call() == getpid());
   const auto permissions = ModuleMaps();
@@ -207,6 +283,7 @@ int main(int, char **argv) {
   DobbyRuntimeInfo info{sizeof(info), DOBBY_API_VERSION};
   CHECK(DobbyGetRuntimeInfo(&info) == RS_SUCCESS);
   CHECK(info.page_size == static_cast<size_t>(sysconf(_SC_PAGESIZE)) && info.architecture);
+  AnalysisAndCoordination();
   OptionsAndBatch();
 #ifdef DOBBY_TEST_PATCH_FAILURES
   FailedBatchCommit(false);

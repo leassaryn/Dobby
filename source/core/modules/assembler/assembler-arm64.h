@@ -69,15 +69,17 @@ public:
     return instructions_.getCount() > 0;
   }
 
-  void link_confused_instructions(CodeBuffer *buffer = nullptr) {
+  bool link_confused_instructions(CodeBuffer *buffer = nullptr) {
     if (!buffer)
-      UNREACHABLE();
+      return false;
     CodeBuffer *_buffer = buffer;
 
     for (size_t i = 0; i < instructions_.getCount(); i++) {
       PseudoLabelInstruction *instruction = (PseudoLabelInstruction *)instructions_.getObject(i);
 
       int32_t offset = pos() - instruction->position_;
+      if (offset % 4 || offset < -(1 << 20) || offset >= (1 << 20))
+        return false;
       const int32_t inst32 = _buffer->LoadInst(instruction->position_);
       int32_t encoded = 0;
 
@@ -92,6 +94,7 @@ public:
       }
       _buffer->FixBindLabel(instruction->position_, encoded);
     }
+    return true;
   };
 
   void link_to(int pos, PseudoLabelType type) {
@@ -249,10 +252,10 @@ public:
   }
 
   bool IsImmediateOffset() const {
-    return (addrmode_ == Offset);
+    return addrmode_ == Offset && regoffset_.type() == CPURegister::kInvalid;
   }
   bool IsRegisterOffset() const {
-    return (addrmode_ == Offset);
+    return addrmode_ == Offset && regoffset_.type() != CPURegister::kInvalid;
   }
   bool IsPreIndex() const {
     return addrmode_ == PreIndex;
@@ -374,7 +377,8 @@ public:
 
 public:
   void SetRealizedAddress(void *address) {
-    DCHECK_EQ(0, reinterpret_cast<uint64_t>(address) % 4);
+    if (!CheckEncoding(reinterpret_cast<uintptr_t>(address) % 4 == 0))
+      return;
     AssemblerBase::SetRealizedAddress(address);
   }
 
@@ -389,6 +393,8 @@ public:
   }
 
   void brk(int code) {
+    if (!CheckEncoding(code >= 0 && code <= 65535))
+      return;
     Emit(BRK | LeftShift(code, 16, 5));
   }
 
@@ -397,8 +403,9 @@ public:
   }
 
   void adrp(const Register &rd, int64_t imm) {
-    DCHECK(rd.Is64Bits());
-    DCHECK((abs(imm) >> 12) < (1 << 21));
+    if (!CheckEncoding(Gpr(rd) && rd.Is64Bits() && imm % 4096 == 0 && imm >= -(int64_t{1} << 32) &&
+                       imm < (int64_t{1} << 32)))
+      return;
 
     int64_t immlo = LeftShift(bits(imm >> 12, 0, 1), 2, 29);
     int64_t immhi = LeftShift(bits(imm >> 12, 2, 20), 19, 5);
@@ -413,7 +420,7 @@ public:
   }
 
   void adds(const Register &rd, const Register &rn, int64_t imm) {
-    UNREACHABLE();
+    AddSubImmediate(rd, rn, Operand(imm), rd.Is64Bits() ? OPT_X(ADDS, imm) : OPT_W(ADDS, imm));
   }
   void sub(const Register &rd, const Register &rn, int64_t imm) {
     if (rd.Is64Bits() && rn.Is64Bits())
@@ -422,10 +429,12 @@ public:
       AddSubImmediate(rd, rn, Operand(imm), OPT_W(SUB, imm));
   }
   void subs(const Register &rd, const Register &rn, int64_t imm) {
-    UNREACHABLE();
+    AddSubImmediate(rd, rn, Operand(imm), rd.Is64Bits() ? OPT_X(SUBS, imm) : OPT_W(SUBS, imm));
   }
 
   void b(int64_t imm) {
+    if (!CheckEncoding(ScaledSigned(imm, 26, 4)))
+      return;
     int32_t imm26 = bits(imm >> 2, 0, 25);
 
     Emit(B | imm26);
@@ -437,10 +446,14 @@ public:
   }
 
   void br(Register rn) {
+    if (!CheckEncoding(Gpr(rn) && rn.Is64Bits() && rn.code() != 31))
+      return;
     Emit(BR | Rn(rn));
   }
 
   void blr(Register rn) {
+    if (!CheckEncoding(Gpr(rn) && rn.Is64Bits() && rn.code() != 31))
+      return;
     Emit(BLR | Rn(rn));
   }
 
@@ -463,17 +476,21 @@ public:
       op = OPT_Q(LDR, literal);
       break;
     default:
-      UNREACHABLE();
-      break;
+      CheckEncoding(false);
+      return;
     }
     EmitLoadRegLiteral(op, rt, imm);
   }
 
   void ldr(const CPURegister &rt, const MemOperand &src) {
+    if (!CheckEncoding(Gpr(rt)))
+      return;
     LoadStore(rt.type() == CPURegister::kRegister_W ? OP_W(LDR) : OP_X(LDR), rt, src);
   }
 
   void ldrsw(const Register &rt, const MemOperand &src) {
+    if (!CheckEncoding(Gpr(rt) && rt.Is64Bits()))
+      return;
     LoadStore(OP(LDRSW), rt, src);
   }
 
@@ -482,7 +499,9 @@ public:
   }
 
   void str(const CPURegister &rt, const MemOperand &src) {
-    LoadStore(OP_X(STR), rt, src);
+    if (!CheckEncoding(Gpr(rt)))
+      return;
+    LoadStore(rt.type() == CPURegister::kRegister_W ? OP_W(STR) : OP_X(STR), rt, src);
   }
 
   void ldp(const Register &rt, const Register &rt2, const MemOperand &src) {
@@ -491,7 +510,7 @@ public:
     } else if (rt.type() == Register::kRegister_X) {
       LoadStorePair(OP_X(LDP), rt, rt2, src);
     } else {
-      UNREACHABLE();
+      CheckEncoding(false);
     }
   }
 
@@ -501,7 +520,7 @@ public:
     } else if (rt.type() == Register::kRegister_X) {
       LoadStorePair(OP_X(STP), rt, rt2, dst);
     } else {
-      UNREACHABLE();
+      CheckEncoding(false);
     }
   }
 
@@ -533,32 +552,40 @@ public:
   }
 
 private:
+  static bool Gpr(const CPURegister &r) {
+    return r.IsRegister() && r.code() >= 0 && r.code() < 32;
+  }
+  static bool ScaledSigned(int64_t value, unsigned bits, int64_t scale) {
+    return value % scale == 0 && value / scale >= -(int64_t{1} << (bits - 1)) &&
+           value / scale < (int64_t{1} << (bits - 1));
+  }
   // label helpers.
   static constexpr int kStartOfLabelLinkChain = 0;
   int LinkAndGetByteOffsetTo(Label *label);
 
   // load helpers.
   void EmitLoadRegLiteral(LoadRegLiteralOp op, CPURegister rt, int64_t imm) {
-    const int32_t encoding = op | LeftShift(imm, 26, 5) | Rt(rt);
+    if (!CheckEncoding(rt.code() >= 0 && rt.code() < 32 && ScaledSigned(imm, 19, 4)))
+      return;
+    const int32_t encoding = op | LeftShift(imm / 4, 19, 5) | Rt(rt);
     Emit(encoding);
   }
 
   void LoadStore(LoadStoreOp op, CPURegister rt, const MemOperand &addr) {
-    int64_t imm12 = addr.offset();
-    if (addr.IsImmediateOffset()) {
-      // TODO: check Scaled ???
-      // Cast enums to int: OR-ing distinct enumeration types is deprecated in C++23.
-      imm12 = addr.offset() >> OpEncode::scale(static_cast<int>(LoadStoreUnsignedOffsetFixed) | op);
-      Emit(static_cast<int>(LoadStoreUnsignedOffsetFixed) | op | LeftShift(imm12, 12, 10) | Rn(addr.base()) | Rt(rt));
-    } else if (addr.IsRegisterOffset()) {
-      UNREACHABLE();
-    } else {
-      // pre-index & post-index
-      UNREACHABLE();
-    }
+    const int scale = OpEncode::scale(static_cast<int>(LoadStoreUnsignedOffsetFixed) | op);
+    if (!CheckEncoding(Gpr(addr.base()) && addr.base().Is64Bits() && addr.IsImmediateOffset() && addr.offset() >= 0 &&
+                       addr.offset() % (int64_t{1} << scale) == 0 && (addr.offset() >> scale) <= 4095))
+      return;
+    const int64_t imm12 = addr.offset() >> scale;
+    Emit(static_cast<int>(LoadStoreUnsignedOffsetFixed) | op | LeftShift(imm12, 12, 10) | Rn(addr.base()) | Rt(rt));
   }
 
   void LoadStorePair(LoadStorePairOp op, CPURegister rt, CPURegister rt2, const MemOperand &addr) {
+    const int scale = rt.type() == CPURegister::kSIMD_FP_Register_Q ? 16 : 8;
+    if (!CheckEncoding(rt.type() == rt2.type() && rt.code() >= 0 && rt.code() < 32 && rt2.code() >= 0 &&
+                       rt2.code() < 32 && Gpr(addr.base()) && addr.base().Is64Bits() && !addr.IsRegisterOffset() &&
+                       ScaledSigned(addr.offset(), 7, scale)))
+      return;
     int32_t combine_fields_op = OpEncode::LoadStorePair(op, rt, rt2, addr) | Rt2(rt2) | Rn(addr.base()) | Rt(rt);
     int32_t addrmodeop;
 
@@ -575,6 +602,9 @@ private:
   }
 
   void MoveWide(Register rd, uint64_t imm, int shift, MoveWideImmediateOp op) {
+    if (!CheckEncoding(Gpr(rd) && imm <= 65535 &&
+                       (shift == -1 || (shift >= 0 && shift % 16 == 0 && shift < (rd.Is64Bits() ? 64 : 32)))))
+      return;
     if (shift > 0)
       shift /= 16;
     else
@@ -585,6 +615,9 @@ private:
   }
 
   void AddSubImmediate(const Register &rd, const Register &rn, const Operand &operand, AddSubImmediateOp op) {
+    if (!CheckEncoding(Gpr(rd) && Gpr(rn) && rd.type() == rn.type() && operand.IsImmediate() &&
+                       operand.Immediate() >= 0 && operand.Immediate() <= 4095))
+      return;
     if (operand.IsImmediate()) {
       int64_t immediate = operand.Immediate();
       int32_t imm12 = LeftShift(immediate, 12, 10);
@@ -602,10 +635,18 @@ private:
     }
   }
   void LogicalImmediate(const Register &rd, const Register &rn, const Operand &operand, LogicalOp op) {
-    int32_t combine_fields_op = OpEncode::EncodeLogicalImmediate(rd, rn, operand);
-    Emit(op | combine_fields_op);
+    (void)rd;
+    (void)rn;
+    (void)operand;
+    (void)op;
+    CheckEncoding(false); // No public bitmask-immediate encoder yet.
   }
   void LogicalShift(const Register &rd, const Register &rn, const Operand &operand, LogicalOp op) {
+    if (!CheckEncoding(Gpr(rd) && Gpr(rn) && operand.IsShiftedRegister() && Gpr(operand.reg()) &&
+                       rd.type() == rn.type() && rd.type() == operand.reg().type() && operand.shift() >= LSL &&
+                       operand.shift() <= ROR && operand.shift_extend_imm() >= 0 &&
+                       operand.shift_extend_imm() < (rd.Is64Bits() ? 64 : 32)))
+      return;
     int32_t combine_fields_op = OpEncode::EncodeLogicalShift(rd, rn, operand);
     Emit(static_cast<int>(op) | LogicalShiftedFixed | combine_fields_op);
   }
@@ -677,7 +718,7 @@ public:
     label->bind_to(bound_pc);
     // If some instructions have been wrote, before the label bound, we need link these `confused` instructions
     if (label->has_confused_instructions()) {
-      label->link_confused_instructions(reinterpret_cast<CodeBuffer *>(this->GetCodeBuffer()));
+      CheckEncoding(label->link_confused_instructions(reinterpret_cast<CodeBuffer *>(this->GetCodeBuffer())));
     }
   }
 

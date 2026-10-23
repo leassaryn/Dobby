@@ -7,11 +7,13 @@ namespace zz {
 namespace arm64 {
 
 void Assembler::Emit(int32_t value) {
-  buffer_->EmitInst(value);
+  if (valid())
+    buffer_->EmitInst(value);
 }
 
 void Assembler::EmitInt64(int64_t value) {
-  buffer_->Emit64(value);
+  if (valid())
+    buffer_->Emit64(value);
 }
 
 void Assembler::bind(Label *label) {
@@ -26,6 +28,8 @@ void Assembler::bind(Label *label) {
 
       // fix the b-instr
       int offset = bound_pc - linkpos;
+      if (!CheckEncoding(ScaledSigned(offset, 26, 4)))
+        return;
       imm26 = bits(offset >> 2, 0, 25);
       int32_t rewrite_inst = (instr & 0xfc000000) | LeftShift(imm26, 26, 0);
       buffer_->FixBindLabel(linkpos, rewrite_inst);

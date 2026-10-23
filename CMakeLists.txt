@@ -188,6 +188,7 @@ set(dobby.SOURCE_FILE_LIST ${dobby.SOURCE_FILE_LIST}
 
   # main
   source/ModernAPI.cpp
+  source/TargetAnalysis.cpp
   source/ModuleImport.cpp
   source/HookLifecycle.cpp
   source/DobbyError.cpp
@@ -352,7 +353,7 @@ if(DOBBY_BUILD_TESTS)
   enable_testing()
   find_package(Threads REQUIRED)
   add_library(dobby_test_importer SHARED tests/import_fixture.c)
-  target_link_options(dobby_test_importer PRIVATE -Wl,-z,relro,-z,now)
+  target_link_options(dobby_test_importer PRIVATE -Wl,-z,relro,-z,now -Wl,--pack-dyn-relocs=none)
   add_executable(dobby_modern_api_test tests/modern_api_test.cc)
   target_link_libraries(dobby_modern_api_test PRIVATE dobby dl)
   if(NOT DOBBY_GENERATE_SHARED)
@@ -462,4 +463,37 @@ if(DOBBY_BUILD_RELOCATION_EMULATOR_TESTS)
     add_test(NAME dobby_relocation_${isa} COMMAND dobby_relocation_${isa}_test)
     set_tests_properties(dobby_relocation_${isa} PROPERTIES TIMEOUT 60)
   endforeach()
+endif()
+
+if(DOBBY_BUILD_RELOCATION_EMULATOR_TESTS)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  find_program(DOBBY_LLVM_MC llvm-mc REQUIRED)
+  add_executable(dobby_assembler_test tests/relocation/assembler_test.cc)
+  target_link_libraries(dobby_assembler_test PRIVATE dobby)
+  if(DOBBY_EMULATOR_ANDROID)
+    target_link_libraries(dobby_assembler_test PRIVATE log)
+  endif()
+  add_test(NAME dobby_assembler_llvm COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/relocation/check_llvm_encoding.py
+    $<TARGET_FILE:dobby_assembler_test> --llvm-mc ${DOBBY_LLVM_MC})
+endif()
+if(DOBBY_BUILD_RELOCATION_EMULATOR_TESTS)
+  add_executable(dobby_relocation_arm_test tests/relocation/arm_emulator_test.cc
+    source/DobbyError.cpp source/core/arch/CpuRegister.cc
+    source/core/modules/assembler/assembler.cc source/core/modules/assembler/assembler-arm.cc
+    source/core/modules/codegen/codegen-arm.cc source/MemoryAllocator/AssemblyCodeBuilder.cc
+    source/MemoryAllocator/MemoryArena.cc source/MemoryAllocator/CodeBuffer/CodeBufferBase.cc
+    source/MemoryAllocator/CodeBuffer/code-buffer-arm.cc
+    source/InstructionRelocation/arm/ARMInstructionRelocation.cc
+    source/UserMode/PlatformUtil/Linux/ProcessRuntimeUtility.cc
+    source/UserMode/UnifiedInterface/platform-posix.cc
+    source/UserMode/ExecMemory/code-patch-tool-posix.cc source/UserMode/ExecMemory/clear-cache-tool-all.c
+    ${logging.SOURCE_FILE_LIST} ${xnucxx.SOURCE_FILE_LIST})
+  target_compile_definitions(dobby_relocation_arm_test PRIVATE DOBBY_TEST_TARGET_ARM)
+  target_link_libraries(dobby_relocation_arm_test PRIVATE PkgConfig::CAPSTONE PkgConfig::UNICORN dl)
+  if(DOBBY_EMULATOR_ANDROID)
+    target_link_libraries(dobby_relocation_arm_test PRIVATE log)
+  endif()
+  add_test(NAME dobby_relocation_arm COMMAND dobby_relocation_arm_test)
+  set_tests_properties(dobby_relocation_arm PROPERTIES TIMEOUT 60)
 endif()

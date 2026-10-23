@@ -76,6 +76,8 @@ void *Load(const char *filename, int flags) {
 } // namespace
 
 PUBLIC int DobbyRegisterImageLoadCallback(linker_load_callback_t callback, DobbyCallbackHandle *handle) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   DobbySetError(DOBBY_ERROR_NONE);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
@@ -132,6 +134,8 @@ PUBLIC int DobbyUnregisterImageLoadCallback(DobbyCallbackHandle handle) {
   return DobbySuccess();
 }
 PUBLIC int DobbyStopImageLoadMonitor(void) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   DobbySetError(DOBBY_ERROR_NONE);
   HookOperationGuard operation;
   {

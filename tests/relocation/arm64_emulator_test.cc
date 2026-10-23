@@ -219,6 +219,7 @@ std::string Difference(const State &a, const State &b) {
 
 std::vector<Fixture> Fixtures() {
   std::vector<Fixture> fixtures{
+      {"overwritten-literal", "ldr", {0x18000040, 0x14000002, 0x12345678, kRet}, 12},
       {"arithmetic-and-store", "add", {0x91000c00, 0xf9000020, kRet}, 8},
       {"cbz-forward", "cbz", {0x34000040, 0x11000400, 0x11000800, kRet}, 12},
       {"cbnz-forward", "cbnz", {0x35000040, 0x11000400, 0x11000800, kRet}, 12},

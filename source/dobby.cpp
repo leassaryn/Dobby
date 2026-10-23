@@ -32,6 +32,8 @@ PUBLIC int DobbyEnumerateHooks(dobby_hook_iterator_t cb, void *userdata) {
 }
 
 PUBLIC int DobbyDestroy(void *address) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   HookOperationGuard operation;
   DobbySetError(DOBBY_ERROR_NONE);
   if (!address)
@@ -43,8 +45,19 @@ PUBLIC int DobbyDestroy(void *address) {
       uint8_t *buffer = entry->origin_chunk_.chunk_buffer;
       uint32_t buffer_size = entry->origin_chunk_.chunk.length;
       void *patch_address = entry->origin_chunk_.chunk.address;
+      PatchScope patch(patch_address, buffer_size, DOBBY_PATCH_REMOVE);
+      if (!patch.ready())
+        return RS_FAILED;
+      auto *route = static_cast<InterceptRouting *>(entry->route);
+      auto *installed = route->GetTrampolineBuffer();
+      if (memcmp(patch_address, installed->getRawBuffer(), installed->getSize()) != 0 ||
+          (installed->getSize() < buffer_size &&
+           memcmp(static_cast<uint8_t *>(patch_address) + installed->getSize(), buffer + installed->getSize(),
+                  buffer_size - installed->getSize()) != 0))
+        return DobbyFailure(DOBBY_ERROR_CONFLICT);
       if (CodePatch(patch_address, buffer, buffer_size) != kMemoryOperationSuccess)
         return RT_FAILED;
+      patch.Applied();
     }
 
     Interceptor::SharedInstance()->RemoveHookEntry(address);

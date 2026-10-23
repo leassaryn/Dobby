@@ -2,6 +2,7 @@
 #define CORE_ASSEMBLER_H
 
 #include "MemoryAllocator/CodeBuffer/CodeBufferBase.h"
+#include "DobbyError.h"
 
 class CodeBuffer;
 
@@ -56,6 +57,17 @@ public:
 
   ~AssemblerBase();
 
+  bool valid() const {
+    return valid_;
+  }
+  bool CheckEncoding(bool condition) {
+    if (!condition) {
+      valid_ = false;
+      DobbySetError(DOBBY_ERROR_INVALID_ENCODING);
+    }
+    return condition && valid_;
+  }
+
   // === IP / PC register ===
 
   int ip_offset() const;
@@ -79,6 +91,7 @@ public:
   static void FlushICache(addr_t start, addr_t end);
 
 protected:
+  bool valid_ = true;
   CodeBuffer *buffer_;
 
   void *realized_address_;
