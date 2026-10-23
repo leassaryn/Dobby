@@ -74,6 +74,9 @@ static int Prepare(void *address, void *replace_call, void **origin_call, int ne
   }
 
   Interceptor::SharedInstance()->AddHookEntry(entry);
+  DobbyHookInfo prepared{sizeof(prepared)};
+  if (DobbyQueryHook(address, &prepared) == RS_SUCCESS)
+    DobbyRecordEvent(DOBBY_EVENT_PREPARE, DOBBY_ERROR_NONE, address, prepared.patch_size, prepared.relay ? 1 : 0);
 
   // set origin call with relocated function
   if (origin_call)

@@ -9,7 +9,7 @@ import subprocess
 import time
 
 ABIS = ("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-TESTS = ("dobby_api_compatibility_test", "dobby_public_api_c_test", "dobby_hook_safety_test", "dobby_linker_callback_test", "dobby_modern_api_test")
+TESTS = ("dobby_api_compatibility_test", "dobby_public_api_c_test", "dobby_hook_safety_test", "dobby_linker_callback_test", "dobby_modern_api_test", "dobby_plugin_api_test")
 
 
 def main():
@@ -60,7 +60,7 @@ def main():
             result = device(["mkdir", "-p", remote])
             if result.returncode:
                 raise RuntimeError(result.stderr)
-            for library in ("libdobby.so", "libdobby_test_importer.so"):
+            for library in ("libdobby.so", "libdobby_test_importer.so", "libdobby_test_packed.so"):
                 shared = directory / library
                 if shared.is_file():
                     run(adb + ["push", str(shared), remote + "/"], check=True)

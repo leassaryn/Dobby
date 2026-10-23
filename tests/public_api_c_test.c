@@ -21,6 +21,15 @@ int main(void) {
   size_t count = 0;
   if (DobbyInspectImport(NULL, NULL, &imports, NULL, 0, &count) != RS_FAILED)
     return 6;
+  DobbyPluginState plugins = {.struct_size = sizeof(plugins), .api_version = DOBBY_API_VERSION};
+  if (DobbyQueryPluginState(&plugins) != RS_SUCCESS || plugins.deferred_installed)
+    return 7;
+  DobbyAddressSpec spec = {.struct_size = sizeof(spec), .api_version = DOBBY_API_VERSION};
+  void *address = NULL;
+  if (DobbyResolveModuleAddress(0, &spec, &address) != RS_FAILED)
+    return 8;
+  if (DobbyEnableDiagnostics(0) != RS_SUCCESS || DobbyReadDiagnostics(NULL, 0, &count, NULL) != RS_SUCCESS)
+    return 9;
   DobbyResourceStats stats = {.struct_size = sizeof(DobbyResourceStats)};
   return DobbyGetResourceStats(&stats) == RS_SUCCESS ? 0 : 1;
 }

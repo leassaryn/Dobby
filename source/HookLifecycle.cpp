@@ -135,6 +135,8 @@ PatchScope::PatchScope(void *address, size_t size, DobbyPatchOperation operation
   }
 }
 PatchScope::~PatchScope() {
+  DobbyRecordEvent(DOBBY_EVENT_PATCH, DobbyGetLastError(), address_, size_, (uint64_t(operation_) << 1) | applied_,
+                   DobbyGetLastSystemError());
   if (!entered_)
     return;
   const auto error = DobbyGetLastError();

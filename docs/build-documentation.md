@@ -136,6 +136,8 @@ Add `-DDOBBY_BUILD_TESTS=ON` and build these targets:
   prepared/committed snapshots, retirement, teardown and reinstall. ARM includes
   ARM and Thumb fixtures; ARM64 with NearBranch includes short adjacent methods,
   loader stubs, BTI landing pads and PAC prologues.
+- `dobby_plugin_api_test`: deferred hooks, pinned resolver guards, malformed ELF/APS2
+  parsing, packed import fixture, diagnostic overflow and plugin teardown.
 - `dobby_linker_callback_test`: lazy registration, callback deduplication, reentry
   and successful/failed real `dlopen` calls (when the plugin is enabled).
 - `dobby_public_api_c_test`: C23 header and diagnostic/resource API linkage.

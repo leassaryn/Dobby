@@ -1,6 +1,7 @@
 #include "dobby_internal.h"
 #include "Interceptor.h"
 #include "HookLifecycle.h"
+#include "PluginSupport/PackedRelocations.h"
 #include <dlfcn.h>
 #include <link.h>
 #include <elf.h>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <limits>
 #include <algorithm>
+#include <cstdlib>
 
 namespace {
 struct Module {
@@ -68,8 +70,14 @@ std::shared_ptr<Module> Acquire(const char *name) {
     DobbySetError(DOBBY_ERROR_INVALID_ARGUMENT);
     return {};
   }
+  std::string normalized = name;
+  if (strchr(name, '/')) {
+    std::unique_ptr<char, decltype(&free)> resolved(realpath(name, nullptr), &free);
+    if (resolved)
+      normalized = resolved.get();
+  }
   auto module = std::make_shared<Module>();
-  Search search{name, module.get()};
+  Search search{normalized.c_str(), module.get()};
   dl_iterate_phdr(Find, &search);
   if (search.matches != 1) {
     DobbySetError(search.matches ? DOBBY_ERROR_CONFLICT : DOBBY_ERROR_NOT_FOUND);
@@ -103,8 +111,14 @@ struct Import {
   void *replacement;
   std::vector<Slot> slots;
 };
-std::unordered_map<uint64_t, std::shared_ptr<Module>> modules;
-std::unordered_map<uint64_t, Import> imports;
+auto &Modules() {
+  static std::unordered_map<uint64_t, std::shared_ptr<Module>> values;
+  return values;
+}
+auto &Imports() {
+  static std::unordered_map<uint64_t, Import> values;
+  return values;
+}
 uint64_t next_module = 1, next_import = 1;
 
 bool Slots(const Module &module, const char *name, const char *version, uint32_t flags, std::vector<Slot> &slots) {
@@ -127,6 +141,8 @@ bool Slots(const Module &module, const char *name, const char *version, uint32_t
   ElfW(Sxword) kind = 0;
   uintptr_t rel = 0, rela = 0, versym = 0, verneed = 0;
   size_t rel_size = 0, rela_size = 0, verneed_count = 0;
+  uintptr_t packed_rel = 0, packed_rela = 0;
+  size_t packed_rel_size = 0, packed_rela_size = 0;
   size_t relent = sizeof(ElfW(Rel)), relaent = sizeof(ElfW(Rela));
   bool terminated = false;
   for (size_t i = 0; i < count; ++i) {
@@ -136,6 +152,18 @@ bool Slots(const Module &module, const char *name, const char *version, uint32_t
       break;
     }
     switch (d.d_tag) {
+    case 0x6000000f: // DT_ANDROID_REL
+      packed_rel = d.d_un.d_ptr;
+      break;
+    case 0x60000010: // DT_ANDROID_RELSZ
+      packed_rel_size = d.d_un.d_val;
+      break;
+    case 0x60000011: // DT_ANDROID_RELA
+      packed_rela = d.d_un.d_ptr;
+      break;
+    case 0x60000012: // DT_ANDROID_RELASZ
+      packed_rela_size = d.d_un.d_val;
+      break;
     case DT_REL:
       rel = d.d_un.d_ptr;
       break;
@@ -252,6 +280,63 @@ bool Slots(const Module &module, const char *name, const char *version, uint32_t
       tables.push_back({rela, rela_size, true, false});
     }
   }
+  auto accept = [&](uint64_t offset, uint64_t info, bool plt) -> bool {
+#if __SIZEOF_POINTER__ == 8
+    const size_t symbol_index = ELF64_R_SYM(info);
+    const auto type = ELF64_R_TYPE(info);
+#else
+    const size_t symbol_index = ELF32_R_SYM(info);
+    const auto type = ELF32_R_TYPE(info);
+#endif
+#if defined(__aarch64__)
+    constexpr auto jump_slot = R_AARCH64_JUMP_SLOT, glob_dat = R_AARCH64_GLOB_DAT;
+#elif defined(__arm__)
+    constexpr auto jump_slot = R_ARM_JUMP_SLOT, glob_dat = R_ARM_GLOB_DAT;
+#elif defined(__x86_64__)
+    constexpr auto jump_slot = R_X86_64_JUMP_SLOT, glob_dat = R_X86_64_GLOB_DAT;
+#else
+    constexpr auto jump_slot = R_386_JMP_SLOT, glob_dat = R_386_GLOB_DAT;
+#endif
+    if (type != (plt ? jump_slot : glob_dat))
+      return true;
+    if (symbol_index > (UINTPTR_MAX - symbols) / sizeof(ElfW(Sym)))
+      return false;
+    const uintptr_t address = symbols + symbol_index * sizeof(ElfW(Sym));
+    if (!module.Contains(address, sizeof(ElfW(Sym))))
+      return false;
+    const auto &symbol = *reinterpret_cast<const ElfW(Sym) *>(address);
+    if (symbol.st_name >= string_size)
+      return false;
+    const char *symbol_name = reinterpret_cast<const char *>(strings + symbol.st_name);
+    if (!memchr(symbol_name, 0, string_size - symbol.st_name))
+      return false;
+    if (strcmp(name, symbol_name))
+      return true;
+    uint16_t version_index = 0;
+    if (versym) {
+      if (symbol_index > (UINTPTR_MAX - versym) / sizeof(ElfW(Half)))
+        return false;
+      const auto vaddr = versym + symbol_index * sizeof(ElfW(Half));
+      if (!module.Contains(vaddr, sizeof(ElfW(Half))))
+        return false;
+      version_index = *reinterpret_cast<const ElfW(Half) *>(vaddr) & 0x7fff;
+    }
+    if (version) {
+      const auto v = versions.find(version_index);
+      if (v == versions.end() || v->second != version)
+        return true;
+    }
+    if (offset > UINTPTR_MAX - module.base)
+      return false;
+    auto *slot = reinterpret_cast<void **>(module.base + offset);
+    if (reinterpret_cast<uintptr_t>(slot) % alignof(void *) ||
+        !module.Contains(reinterpret_cast<uintptr_t>(slot), sizeof(void *)))
+      return false;
+    if (std::any_of(slots.begin(), slots.end(), [&](const Slot &s) { return s.address == slot; }))
+      return true;
+    slots.push_back({slot, __atomic_load_n(slot, __ATOMIC_ACQUIRE), false, static_cast<uint32_t>(type), version_index});
+    return true;
+  };
   for (auto table : tables) {
     const size_t stride = table.rela ? sizeof(ElfW(Rela)) : sizeof(ElfW(Rel));
     relocations = module.Pointer(table.address, table.size);
@@ -269,61 +354,20 @@ bool Slots(const Module &module, const char *name, const char *version, uint32_t
         offset = r.r_offset;
         info = r.r_info;
       }
-#if __SIZEOF_POINTER__ == 8
-      const size_t symbol_index = ELF64_R_SYM(info);
-      const auto type = ELF64_R_TYPE(info);
-#else
-      const size_t symbol_index = ELF32_R_SYM(info);
-      const auto type = ELF32_R_TYPE(info);
-#endif
-#if defined(__aarch64__)
-      constexpr auto jump_slot = R_AARCH64_JUMP_SLOT, glob_dat = R_AARCH64_GLOB_DAT;
-#elif defined(__arm__)
-      constexpr auto jump_slot = R_ARM_JUMP_SLOT, glob_dat = R_ARM_GLOB_DAT;
-#elif defined(__x86_64__)
-      constexpr auto jump_slot = R_X86_64_JUMP_SLOT, glob_dat = R_X86_64_GLOB_DAT;
-#else
-      constexpr auto jump_slot = R_386_JMP_SLOT, glob_dat = R_386_GLOB_DAT;
-#endif
-      if (type != (table.plt ? jump_slot : glob_dat))
+      if (!accept(offset, info, table.plt))
+        return false;
+    }
+  }
+  if (flags & DOBBY_IMPORT_GLOB_DAT) {
+    for (const auto &table :
+         {Table{packed_rel, packed_rel_size, false, false}, Table{packed_rela, packed_rela_size, true, false}}) {
+      if (!table.size)
         continue;
-      if (symbol_index > (UINTPTR_MAX - symbols) / sizeof(ElfW(Sym)))
+      const auto address = module.Pointer(table.address, table.size);
+      if (!address ||
+          !dobby::VisitPacked(reinterpret_cast<const void *>(address), table.size, table.rela, sizeof(void *) * 8,
+                              [&](uint64_t offset, uint64_t info, int64_t) { return accept(offset, info, false); }))
         return false;
-      const uintptr_t address = symbols + symbol_index * sizeof(ElfW(Sym));
-      if (!module.Contains(address, sizeof(ElfW(Sym))))
-        return false;
-      const auto &symbol = *reinterpret_cast<const ElfW(Sym) *>(address);
-      if (symbol.st_name >= string_size)
-        return false;
-      const char *symbol_name = reinterpret_cast<const char *>(strings + symbol.st_name);
-      if (!memchr(symbol_name, 0, string_size - symbol.st_name))
-        return false;
-      if (strcmp(name, symbol_name))
-        continue;
-      uint16_t version_index = 0;
-      if (versym) {
-        if (symbol_index > (UINTPTR_MAX - versym) / sizeof(ElfW(Half)))
-          return false;
-        const auto vaddr = versym + symbol_index * sizeof(ElfW(Half));
-        if (!module.Contains(vaddr, sizeof(ElfW(Half))))
-          return false;
-        version_index = *reinterpret_cast<const ElfW(Half) *>(vaddr) & 0x7fff;
-      }
-      if (version) {
-        const auto v = versions.find(version_index);
-        if (v == versions.end() || v->second != version)
-          continue;
-      }
-      if (offset > UINTPTR_MAX - module.base)
-        return false;
-      auto *slot = reinterpret_cast<void **>(module.base + offset);
-      if (reinterpret_cast<uintptr_t>(slot) % alignof(void *) ||
-          !module.Contains(reinterpret_cast<uintptr_t>(slot), sizeof(void *)))
-        return false;
-      if (std::any_of(slots.begin(), slots.end(), [&](const Slot &s) { return s.address == slot; }))
-        continue;
-      slots.push_back(
-          {slot, __atomic_load_n(slot, __ATOMIC_ACQUIRE), false, static_cast<uint32_t>(type), version_index});
     }
   }
   return true;
@@ -360,7 +404,7 @@ PUBLIC int DobbyAcquireModule(const char *name, DobbyModuleHandle *handle) {
   if (!next_module)
     return DobbyFailure(DOBBY_ERROR_BUSY);
   *handle = next_module++;
-  modules.emplace(*handle, std::move(module));
+  Modules().emplace(*handle, std::move(module));
   return DobbySuccess();
 }
 PUBLIC int DobbyQueryModule(DobbyModuleHandle handle, DobbyModuleInfo *info) {
@@ -368,8 +412,8 @@ PUBLIC int DobbyQueryModule(DobbyModuleHandle handle, DobbyModuleInfo *info) {
   HookOperationGuard guard;
   if (!info || info->struct_size < sizeof(*info) || info->api_version != DOBBY_API_VERSION)
     return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
-  const auto it = modules.find(handle);
-  if (it == modules.end())
+  const auto it = Modules().find(handle);
+  if (it == Modules().end())
     return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
   *info = {sizeof(*info), DOBBY_API_VERSION, reinterpret_cast<void *>(it->second->base), it->second->path.c_str()};
   return DobbySuccess();
@@ -381,8 +425,8 @@ PUBLIC int DobbyReleaseModule(DobbyModuleHandle handle) {
   std::shared_ptr<Module> module;
   {
     HookOperationGuard guard;
-    auto it = modules.find(handle);
-    if (it == modules.end())
+    auto it = Modules().find(handle);
+    if (it == Modules().end())
       return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
     struct Check {
       const Module *module;
@@ -400,7 +444,7 @@ PUBLIC int DobbyReleaseModule(DobbyModuleHandle handle) {
           return 0;
         },
         &check);
-    for (const auto &[id, entry] : imports)
+    for (const auto &[id, entry] : Imports())
       if (it->second->Contains(reinterpret_cast<uintptr_t>(entry.replacement) & ~uintptr_t{1}, 1))
         check.busy = true;
 #ifdef DOBBY_HAS_LINKER_CALLBACK
@@ -412,12 +456,119 @@ PUBLIC int DobbyReleaseModule(DobbyModuleHandle handle) {
     for (const auto &h : it->second->headers)
       if (h.p_type == PT_LOAD && DobbyCoordinatorUsesRange(it->second->base + h.p_vaddr, h.p_memsz))
         check.busy = true;
+    extern bool DobbyDeferredUsesRange(uintptr_t, size_t);
+    for (const auto &h : it->second->headers)
+      if (h.p_type == PT_LOAD && DobbyDeferredUsesRange(it->second->base + h.p_vaddr, h.p_memsz))
+        check.busy = true;
     if (check.busy)
       return DobbyFailure(DOBBY_ERROR_BUSY);
     module = std::move(it->second);
-    modules.erase(it);
+    Modules().erase(it);
   }
   module.reset();
+  return DobbySuccess();
+}
+namespace {
+bool BuildId(const Module &module, std::vector<uint8_t> &id) {
+  for (const auto &header : module.headers) {
+    if (header.p_type != PT_NOTE)
+      continue;
+    const auto start = module.Pointer(header.p_vaddr, header.p_memsz);
+    if (!start)
+      continue;
+    size_t cursor = 0;
+    while (header.p_memsz - cursor >= sizeof(ElfW(Nhdr))) {
+      ElfW(Nhdr) note;
+      memcpy(&note, reinterpret_cast<void *>(start + cursor), sizeof(note));
+      cursor += sizeof(note);
+      const uint64_t name_size = (uint64_t(note.n_namesz) + 3) & ~uint64_t{3};
+      const uint64_t desc_size = (uint64_t(note.n_descsz) + 3) & ~uint64_t{3};
+      if (name_size > header.p_memsz - cursor || desc_size > header.p_memsz - cursor - name_size)
+        return false;
+      if (note.n_type == NT_GNU_BUILD_ID && note.n_namesz == 4 && note.n_descsz && note.n_descsz <= 64 &&
+          !memcmp(reinterpret_cast<void *>(start + cursor), "GNU", 4)) {
+        const auto *bytes = reinterpret_cast<const uint8_t *>(start + cursor + name_size);
+        id.assign(bytes, bytes + note.n_descsz);
+        return true;
+      }
+      cursor += name_size + desc_size;
+    }
+  }
+  return false;
+}
+} // namespace
+PUBLIC int DobbyGetModuleBuildId(DobbyModuleHandle handle, uint8_t *bytes, size_t capacity, size_t *size) {
+  HookOperationGuard guard;
+  if (!size || (!bytes && capacity))
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+  *size = 0;
+  const auto it = Modules().find(handle);
+  if (it == Modules().end())
+    return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
+  std::vector<uint8_t> id;
+  if (!BuildId(*it->second, id))
+    return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
+  *size = id.size();
+  if (!bytes && !capacity)
+    return DobbySuccess();
+  if (capacity < id.size())
+    return DobbyFailure(DOBBY_ERROR_PATCH_LIMIT);
+  memcpy(bytes, id.data(), id.size());
+  return DobbySuccess();
+}
+PUBLIC int DobbyResolveModuleAddress(DobbyModuleHandle handle, const DobbyAddressSpec *spec, void **address) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
+  if (!address || !spec || spec->struct_size < sizeof(*spec) || spec->api_version != DOBBY_API_VERSION ||
+      spec->build_id_size > 64 || spec->expected_size > 64 || (spec->build_id_size && !spec->build_id) ||
+      (spec->expected_size && !spec->expected_bytes) || (spec->symbol && !*spec->symbol))
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+  *address = nullptr;
+  std::shared_ptr<Module> pinned;
+  {
+    HookOperationGuard guard;
+    const auto it = Modules().find(handle);
+    if (it == Modules().end())
+      return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
+    pinned = it->second;
+  }
+  const auto &module = *pinned;
+  if (spec->build_id_size) {
+    std::vector<uint8_t> id;
+    if (!BuildId(module, id) || id.size() != spec->build_id_size || memcmp(id.data(), spec->build_id, id.size()))
+      return DobbyFailure(DOBBY_ERROR_CONFLICT);
+  }
+  uintptr_t target;
+  if (spec->symbol) {
+    InternalLoaderScope scope;
+    target = reinterpret_cast<uintptr_t>(dlsym(module.pin, spec->symbol));
+#ifdef DOBBY_HAS_SYMBOL_RESOLVER
+    if (!target || !module.Contains(target, 1))
+      target = reinterpret_cast<uintptr_t>(DobbySymbolResolver(module.path.c_str(), spec->symbol));
+#endif
+  } else {
+    if (spec->offset > UINTPTR_MAX - module.base)
+      return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+    target = module.base + spec->offset;
+  }
+  uintptr_t code = target;
+#if defined(__arm__)
+  code &= ~uintptr_t{1};
+#endif
+  const size_t size = std::max(size_t{1}, spec->expected_size);
+  bool executable = false;
+  for (const auto &h : module.headers)
+    if (h.p_type == PT_LOAD && (h.p_flags & PF_X) && h.p_vaddr <= UINTPTR_MAX - module.base) {
+      const auto start = module.base + h.p_vaddr;
+      if (code >= start && code - start <= h.p_memsz && size <= h.p_memsz - (code - start))
+        executable = true;
+    }
+  if (!target || !executable || !module.Contains(code, size))
+    return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
+  if (spec->expected_size && memcmp(reinterpret_cast<void *>(code), spec->expected_bytes, spec->expected_size))
+    return DobbyFailure(DOBBY_ERROR_CONFLICT);
+  *address = reinterpret_cast<void *>(target);
+  DobbyRecordEvent(DOBBY_EVENT_RESOLVE, DOBBY_ERROR_NONE, *address, size, handle);
   return DobbySuccess();
 }
 PUBLIC int DobbyHookImportEx(const char *name, const char *symbol, void *replacement, const DobbyImportOptions *options,
@@ -445,7 +596,7 @@ PUBLIC int DobbyHookImportEx(const char *name, const char *symbol, void *replace
   for (const auto &slot : entry.slots) {
     if (!slot.original || slot.original != entry.slots.front().original || slot.original == replacement)
       return DobbyFailure(DOBBY_ERROR_CONFLICT);
-    for (const auto &[id, active] : imports)
+    for (const auto &[id, active] : Imports())
       for (const auto &other : active.slots)
         if (other.address == slot.address)
           return DobbyFailure(DOBBY_ERROR_CONFLICT);
@@ -453,7 +604,7 @@ PUBLIC int DobbyHookImportEx(const char *name, const char *symbol, void *replace
   if (!next_import)
     return DobbyFailure(DOBBY_ERROR_BUSY);
   const uint64_t id = next_import++;
-  auto [it, inserted] = imports.emplace(id, std::move(entry));
+  auto [it, inserted] = Imports().emplace(id, std::move(entry));
   (void)inserted;
   DobbyError warning = DOBBY_ERROR_NONE;
   int warning_errno = 0;
@@ -471,7 +622,7 @@ PUBLIC int DobbyHookImportEx(const char *name, const char *symbol, void *replace
         }
       }
       if (rollback)
-        imports.erase(it);
+        Imports().erase(it);
       else
         *handle = id; // retain ownership for a retry of DobbyDestroyImport
       return DobbyFailure(rollback ? cause : DOBBY_ERROR_ROLLBACK_FAILED, system_error);
@@ -491,8 +642,8 @@ PUBLIC int DobbyGetImportOriginal(DobbyImportHandle handle, void **original) {
   HookOperationGuard guard;
   if (!original)
     return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
-  auto it = imports.find(handle);
-  if (it == imports.end())
+  auto it = Imports().find(handle);
+  if (it == Imports().end())
     return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
   *original = it->second.slots.front().original;
   return DobbySuccess();
@@ -506,8 +657,8 @@ PUBLIC int DobbyDestroyImport(DobbyImportHandle handle) {
   int warning_errno = 0;
   {
     HookOperationGuard guard;
-    auto it = imports.find(handle);
-    if (it == imports.end())
+    auto it = Imports().find(handle);
+    if (it == Imports().end())
       return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
     for (auto &slot : it->second.slots) {
       if (!slot.applied)
@@ -521,7 +672,7 @@ PUBLIC int DobbyDestroyImport(DobbyImportHandle handle) {
       }
     }
     module = std::move(it->second.module);
-    imports.erase(it);
+    Imports().erase(it);
   }
   module.reset();
   DobbySetError(warning, warning_errno);
@@ -558,7 +709,7 @@ PUBLIC int DobbyInspectImport(const char *name, const char *symbol, const DobbyI
   for (size_t i = 0; i < slots.size(); ++i) {
     const auto &slot = slots[i];
     output[i] = {slot.address, slot.original, nullptr, 0, slot.type, slot.version, 0};
-    for (const auto &[id, entry] : imports)
+    for (const auto &[id, entry] : Imports())
       for (const auto &owned : entry.slots)
         if (owned.address == slot.address) {
           output[i].owner = id;
@@ -567,4 +718,9 @@ PUBLIC int DobbyInspectImport(const char *name, const char *symbol, const DobbyI
         }
   }
   return DobbySuccess();
+}
+
+void DobbyGetModulePluginState(size_t &module_count, size_t &import_count) {
+  module_count = Modules().size();
+  import_count = Imports().size();
 }

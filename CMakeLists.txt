@@ -190,6 +190,8 @@ set(dobby.SOURCE_FILE_LIST ${dobby.SOURCE_FILE_LIST}
   source/ModernAPI.cpp
   source/TargetAnalysis.cpp
   source/ModuleImport.cpp
+  source/PluginSupport/Diagnostics.cpp
+  source/PluginSupport/DeferredHooks.cpp
   source/HookLifecycle.cpp
   source/DobbyError.cpp
   source/dobby.cpp
@@ -253,6 +255,7 @@ add_subdirectory(external/xnucxx)
 get_target_property(xnucxx.SOURCE_FILE_LIST xnucxx SOURCES)
 
 if(Plugin.SymbolResolver)
+  add_definitions(-DDOBBY_HAS_SYMBOL_RESOLVER)
   message(STATUS "[Dobby] Enable symbol resolver")
 
   include_directories(builtin-plugin/SymbolResolver)
@@ -264,6 +267,10 @@ if(Plugin.SymbolResolver)
 endif()
 
 if(Plugin.Android.BionicLinkerRestriction)
+  if(NOT Plugin.SymbolResolver)
+    message(FATAL_ERROR "Plugin.Android.BionicLinkerRestriction requires Plugin.SymbolResolver")
+  endif()
+  add_definitions(-DDOBBY_HAS_LINKER_BYPASS)
   if(NOT SYSTEM.Android)
     message(FATAL_ERROR "[!] Plugin.Android.BionicLinkerRestriction only works on Android.")
   endif()
@@ -355,6 +362,24 @@ if(DOBBY_BUILD_TESTS)
   find_package(Threads REQUIRED)
   add_library(dobby_test_importer SHARED tests/import_fixture.c)
   target_link_options(dobby_test_importer PRIVATE -Wl,-z,relro,-z,now -Wl,--pack-dyn-relocs=none)
+  add_library(dobby_test_packed SHARED tests/import_fixture.c)
+  target_link_options(dobby_test_packed PRIVATE -Wl,-z,relro,-z,now -Wl,--pack-dyn-relocs=android)
+  if(SYSTEM.Android AND (PROCESSOR.AARCH64 OR PROCESSOR.X86_64))
+    foreach(fixture dobby_test_importer dobby_test_packed)
+      target_link_options(${fixture} PRIVATE -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384)
+    endforeach()
+  endif()
+  add_executable(dobby_plugin_api_test tests/plugin_api_test.cc)
+  target_link_libraries(dobby_plugin_api_test PRIVATE dobby dl)
+  if(Plugin.LinkerLoadCallback)
+    target_compile_definitions(dobby_plugin_api_test PRIVATE DOBBY_TEST_AUTO_DEFERRED)
+  endif()
+  if(Plugin.SymbolResolver)
+    target_compile_definitions(dobby_plugin_api_test PRIVATE DOBBY_TEST_SYMBOL_RESOLVER)
+  endif()
+  add_dependencies(dobby_plugin_api_test dobby_test_packed)
+  add_test(NAME dobby_plugin_api COMMAND dobby_plugin_api_test)
+  set_tests_properties(dobby_plugin_api PROPERTIES TIMEOUT 60)
   add_executable(dobby_modern_api_test tests/modern_api_test.cc)
   target_link_libraries(dobby_modern_api_test PRIVATE dobby dl)
   if(NOT DOBBY_GENERATE_SHARED)

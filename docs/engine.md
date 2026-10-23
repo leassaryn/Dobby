@@ -125,8 +125,9 @@ Callbacks run per patch; batch installation is still not atomic publication.
 imported symbol's `DT_VERNEED` version, and flags select standard PLT `JUMP_SLOT`,
 standard dynamic-table `GLOB_DAT`, or both. Null options preserve the legacy
 PLT-only behavior. `GLOB_DAT` can refer to data as well as functions; the caller
-must use a replacement of the appropriate type. Android packed relocation
-streams and symbol-definition version lookup are not implemented.
+must use a replacement of the appropriate type. Android APS2 packed GLOB_DAT
+streams are supported; symbol-definition version lookup remains unimplemented.
+See [plugin contracts](plugins.md) for parser bounds and lifecycle details.
 
 `DobbyInspectImport` supports a count query followed by caller-provided slot
 storage. It reports slot/current/original addresses, Dobby owner handle,

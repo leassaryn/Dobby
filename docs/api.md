@@ -197,8 +197,8 @@ pointers after a failed batch, then collect retired resources at a safe point.
 standard ELF PLT `JUMP_SLOT` entries (REL or RELA) in one already loaded importing
 module. It supports full RELRO by temporarily changing permissions and restoring
 them. This backend does not rewrite the provider's function body. The legacy API selects PLT entries. `DobbyHookImportEx` additionally supports
-standard-table `GLOB_DAT` and imported symbol-version selection. Packed relocation
-tables remain unsupported.
+standard/Android APS2 `GLOB_DAT` and imported symbol-version selection. See
+[plugin contracts](plugins.md) for parser bounds, deferred hooks and lifecycle.
 Missing imports fail rather than falling back to inline hooking. The table format
 follows [Bionic's ELF relocation handling](https://android.googlesource.com/platform/bionic/+/bcc04d0069a919a6ac4a2b378e15dd0a50c46aec/linker/linker.cpp).
 

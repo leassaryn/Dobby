@@ -293,6 +293,72 @@ int DobbyAcquireModule(const char *image_name, DobbyModuleHandle *handle);
 int DobbyQueryModule(DobbyModuleHandle handle, DobbyModuleInfo *info);
 int DobbyReleaseModule(DobbyModuleHandle handle);
 
+// Address resolution stays within a pinned module's executable segments.
+typedef struct {
+  size_t struct_size;
+  uint32_t api_version;
+  const char *symbol; // NULL selects load-bias-relative offset (Thumb bit retained).
+  uintptr_t offset;
+  const uint8_t *build_id; // optional exact GNU build ID
+  size_t build_id_size;
+  const uint8_t *expected_bytes; // optional prologue guard, up to 64 bytes
+  size_t expected_size;
+} DobbyAddressSpec;
+int DobbyGetModuleBuildId(DobbyModuleHandle handle, uint8_t *bytes, size_t capacity, size_t *size);
+int DobbyResolveModuleAddress(DobbyModuleHandle handle, const DobbyAddressSpec *spec, void **address);
+
+// Deferred hooks own their hook and module pin until cancellation. Queries borrow pointers.
+typedef uint64_t DobbyDeferredHandle;
+typedef enum { DOBBY_DEFERRED_PENDING, DOBBY_DEFERRED_INSTALLED, DOBBY_DEFERRED_FAILED } DobbyDeferredState;
+typedef struct {
+  size_t struct_size;
+  uint32_t api_version;
+  DobbyDeferredState state;
+  DobbyError error;
+  void *target;
+  void *original;
+} DobbyDeferredInfo;
+int DobbyRegisterDeferredHook(const char *image, const DobbyAddressSpec *spec, void *replacement,
+                              const DobbyHookOptions *options, DobbyDeferredHandle *handle);
+int DobbyQueryDeferredHook(DobbyDeferredHandle handle, DobbyDeferredInfo *info);
+// Retry pending/failed requests at an application safe point. Successful installs are not repeated.
+int DobbyPollDeferredHooks(void);
+// Installed hooks are removed first; conflicts preserve the handle for retry. Quiescence required.
+int DobbyCancelDeferredHook(DobbyDeferredHandle handle);
+
+// Bounded diagnostic queue: no user callback executes inside hook/loader management.
+typedef enum {
+  DOBBY_EVENT_ERROR,
+  DOBBY_EVENT_PATCH,
+  DOBBY_EVENT_RESOLVE,
+  DOBBY_EVENT_DEFERRED,
+  DOBBY_EVENT_PREPARE
+} DobbyEventKind;
+typedef struct {
+  uint64_t sequence;
+  DobbyEventKind kind;
+  DobbyError error;
+  int system_error;
+  void *address;
+  size_t size;
+  uint64_t detail;
+} DobbyDiagnosticEvent;
+int DobbyEnableDiagnostics(int enabled); // clears queue and drop counter
+int DobbyReadDiagnostics(DobbyDiagnosticEvent *events, size_t capacity, size_t *count, uint64_t *dropped);
+typedef struct {
+  size_t struct_size;
+  uint32_t api_version;
+  size_t deferred_pending, deferred_installed, deferred_failed;
+  size_t image_callbacks;
+  size_t module_handles, import_hooks;
+  int image_monitor_active;
+} DobbyPluginState;
+int DobbyQueryPluginState(DobbyPluginState *state);
+// Requires no deferred/module/import handles or user callbacks; never silently removes user hooks.
+int DobbyShutdownPlugins(void);
+// Optional Android plugin. No writes to guessed namespace/soinfo layouts.
+int DobbySetLinkerNamespaceBypass(int enabled);
+
 typedef uint64_t DobbyImportHandle;
 // Hooks matching JUMP_SLOT entries in one pinned importing ELF module.
 // Standard REL/RELA PLT tables only. Full RELRO permissions are restored.

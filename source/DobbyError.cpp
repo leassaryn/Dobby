@@ -7,6 +7,8 @@ thread_local int last_system_error = 0;
 } // namespace
 
 void DobbySetError(DobbyError error, int system_error) {
+  if (error != DOBBY_ERROR_NONE)
+    DobbyRecordEvent(DOBBY_EVENT_ERROR, error, nullptr, 0, 0, system_error);
   last_error = error;
   last_system_error = system_error;
 }

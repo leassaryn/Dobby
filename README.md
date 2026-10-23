@@ -10,6 +10,7 @@ library by default, with a shared-library option, using C++23/C23.
 - ELF PLT/GOT import hooks with version selection/slot inspection, module pins and removable callbacks.
 - Thread-local diagnostics, runtime capabilities, hook inspection and resource teardown.
 - Capstone/Unicorn differential relocation tests, seeded fuzzing/replay and an optional benchmark.
+- Deferred module hooks, guarded symbol/offset resolution, structured diagnostics and Android packed imports.
 - Optional ELF symbol resolution, linker-load callbacks and Bionic linker integration.
 - CMake `Dobby::dobby` target and installable `find_package(Dobby CONFIG)` package.
 
@@ -29,7 +30,7 @@ Use `--library shared`, `--configuration Debug`, or `--tests` as needed.
 
 
 See [build and device tests](docs/build-documentation.md),
-[API and migration guide](docs/api.md), [engine guide](docs/engine.md), [verification matrix](docs/compatibility.md),
+[API and migration guide](docs/api.md), [plugin lifecycle and usage](docs/plugins.md), [engine guide](docs/engine.md), [verification matrix](docs/compatibility.md),
 and the public [header](include/dobby.h).
 Android is the supported release target. The Linux CMake path is only a local
 development convenience; POSIX/Linux implementation files are required by Android.

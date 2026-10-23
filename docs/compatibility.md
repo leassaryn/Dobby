@@ -1,5 +1,33 @@
 # Compatibility evidence
 
+## Plugin update — 2026-10-24
+
+NDK 29.0.14206865 / CMake 4.1.2, Android 14 API 34 with 4096-byte pages.
+
+| Check | Observed result |
+| --- | --- |
+| Release static/shared, four ABIs | Eight builds passed without warnings; 64-bit ELF alignment checks passed |
+| ARM64 and ARMv7 device tests | 22 executions passed: static/shared compatibility, C API, callbacks, modern API and plugin API, plus ARM64 safety |
+| ARM64 Debug ASan/UBSan | All six CTests passed; function-type checking excluded for generated code and vptr excluded as described below |
+| Symbol/loader/Bionic plugins disabled | ARM64 plugin and C API tests passed using manual deferred polling |
+| Lifecycle | Early constructor calls, refused-patch retry, foreign ownership, cancellation and a destructor joining another Dobby-using thread passed |
+| Parsers | Grouped REL/RELA, signed deltas, truncation/overflow/malformed ELF cases and 10,000 deterministic malformed APS2 streams passed |
+| Bionic private ABI probe | Both ARM64 and ARMv7 report UNSUPPORTED_FORMAT on this device; disable/shutdown succeeds. Actual bypass availability is not claimed |
+| Benchmark | ARM64: 200,000 iterations, inline-original 5.555 ns, instrumentation 63.490 ns, setup/commit/query/destroy 83.303 us; environment-specific, not a performance guarantee |
+
+Evidence files: `build/plugin-static-runtime.json`, `build/plugin-shared-runtime.json`,
+`build/plugin-sanitized-tests.log`, `build/plugin-benchmark.json` and the matching
+build logs. These generated artifacts can be removed by cleanup.
+
+The NDK sanitizer's vptr check also rejects a standalone program consisting only
+of a virtual base constructor and derived object, without Dobby. This environment
+therefore excludes vptr while retaining ASan and the remaining UBSan checks.
+LeakSanitizer is unavailable. No x86/x64 Android runtime, true 16 KB kernel or
+hardware BTI/PAC validation was performed. Hosted CI has not been executed here.
+See [plugin contracts and limits](plugins.md).
+
+## Earlier engine verification
+
 Local verification on 2026-10-23, using Android NDK 29.0.14206865 and CMake 4.1.2.
 Unmarked rows describe the engine changes. Rows marked baseline were checked at
 commit 9161527 and were not rerun for this update. These results do not imply
@@ -43,8 +71,8 @@ Emulator commands and coverage are documented in [the relocation test guide](../
 These semantic checks exposed a W-literal load incorrectly emitted as a 64-bit
 load; destination-width selection was fixed and the regression now passes.
 
-Known limits: ELF import hooking covers standard REL/RELA JUMP_SLOT/GLOB_DAT entries,
-not Android packed relocation streams; Thumb IT support is a documented subset;
+Known limits: ELF import hooking covers standard REL/RELA JUMP_SLOT/GLOB_DAT and
+Android APS2 GLOB_DAT streams; Thumb IT support is a documented subset;
 x86 VEX/EVEX and LOOP/JCXZ relocation is rejected;
 short-function checks are conservative; patching is not atomic against executing
 threads; collection and complete pool release require application-proven

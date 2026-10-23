@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <cerrno>
 
 namespace {
 std::mutex callback_mutex;
@@ -20,7 +21,10 @@ struct Callback {
   size_t active = 0;
   bool enabled = true;
 };
-std::vector<std::shared_ptr<Callback>> callbacks;
+auto &Callbacks() {
+  static std::vector<std::shared_ptr<Callback>> values;
+  return values;
+}
 uint64_t next_callback = 1;
 std::atomic<size_t> active_loads{0};
 struct LoadScope {
@@ -46,7 +50,7 @@ void Notify(const char *filename, void *result) {
   std::vector<std::shared_ptr<Callback>> snapshot;
   {
     std::lock_guard<std::mutex> lock(callback_mutex);
-    snapshot = callbacks;
+    snapshot = Callbacks();
   }
   for (auto &callback : snapshot) {
     {
@@ -70,7 +74,11 @@ void *Load(const char *filename, int flags) {
   LoadScope scope;
   void *result = original_loader.load()(filename, flags);
 #endif
+  const auto error = DobbyGetLastError();
+  const int system_error = DobbyGetLastSystemError(), saved_errno = errno;
   Notify(filename, result);
+  DobbySetError(error, system_error);
+  errno = saved_errno;
   return result;
 }
 } // namespace
@@ -79,22 +87,20 @@ PUBLIC int DobbyRegisterImageLoadCallback(linker_load_callback_t callback, Dobby
   if (DobbyInPatchCoordinator())
     return DobbyFailure(DOBBY_ERROR_BUSY);
   DobbySetError(DOBBY_ERROR_NONE);
-  HookOperationGuard operation;
-  DobbySetError(DOBBY_ERROR_NONE);
   if (!callback || !handle)
     return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
   *handle = 0;
-  if (!loader_target) {
+  // Resolve before taking the operation lock: loader constructors may call Dobby.
 #if defined(__ANDROID__)
-    loader_target = DobbySymbolResolver(nullptr, "__loader_dlopen");
+  void *resolved = DobbySymbolResolver(nullptr, "__loader_dlopen");
 #else
-    loader_target = DobbySymbolResolver(nullptr, "dlopen");
+  void *resolved = DobbySymbolResolver(nullptr, "dlopen");
 #endif
-    if (!loader_target) {
-      DobbySetError(DOBBY_ERROR_NOT_FOUND);
-      return RS_FAILED;
-    }
-  }
+  HookOperationGuard operation;
+  if (!loader_target)
+    loader_target = resolved;
+  if (!loader_target)
+    return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
   void *original = nullptr;
   if (DobbyPrepare(loader_target, reinterpret_cast<void *>(Load), &original) != RS_SUCCESS)
     return RS_FAILED;
@@ -102,7 +108,7 @@ PUBLIC int DobbyRegisterImageLoadCallback(linker_load_callback_t callback, Dobby
   if (DobbyCommit(loader_target) != RS_SUCCESS)
     return RS_FAILED;
   std::lock_guard<std::mutex> lock(callback_mutex);
-  for (const auto &existing : callbacks) {
+  for (const auto &existing : Callbacks()) {
     if (existing->function == callback) {
       *handle = existing->id;
       return DobbySuccess();
@@ -113,7 +119,7 @@ PUBLIC int DobbyRegisterImageLoadCallback(linker_load_callback_t callback, Dobby
   auto entry = std::make_shared<Callback>();
   entry->id = next_callback++;
   entry->function = callback;
-  callbacks.push_back(entry);
+  Callbacks().push_back(entry);
   *handle = entry->id;
   return DobbySuccess();
 }
@@ -122,15 +128,18 @@ PUBLIC void dobby_register_image_load_callback(linker_load_callback_t callback) 
   DobbyRegisterImageLoadCallback(callback, &handle);
 }
 PUBLIC int DobbyUnregisterImageLoadCallback(DobbyCallbackHandle handle) {
+  if (DobbyInPatchCoordinator())
+    return DobbyFailure(DOBBY_ERROR_BUSY);
   DobbySetError(DOBBY_ERROR_NONE);
   std::lock_guard<std::mutex> lock(callback_mutex);
-  auto it = std::find_if(callbacks.begin(), callbacks.end(), [&](const auto &entry) { return entry->id == handle; });
-  if (it == callbacks.end())
+  auto it =
+      std::find_if(Callbacks().begin(), Callbacks().end(), [&](const auto &entry) { return entry->id == handle; });
+  if (it == Callbacks().end())
     return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
   if ((*it)->active)
     return DobbyFailure(DOBBY_ERROR_BUSY);
   (*it)->enabled = false;
-  callbacks.erase(it);
+  Callbacks().erase(it);
   return DobbySuccess();
 }
 PUBLIC int DobbyStopImageLoadMonitor(void) {
@@ -140,7 +149,7 @@ PUBLIC int DobbyStopImageLoadMonitor(void) {
   HookOperationGuard operation;
   {
     std::lock_guard<std::mutex> lock(callback_mutex);
-    if (!callbacks.empty() || active_loads.load())
+    if (!Callbacks().empty() || active_loads.load())
       return DobbyFailure(DOBBY_ERROR_BUSY);
   }
   if (!loader_target)
@@ -159,10 +168,16 @@ PUBLIC int DobbyStopImageLoadMonitor(void) {
 
 bool DobbyCallbacksUseRange(uintptr_t start, size_t size) {
   std::lock_guard<std::mutex> lock(callback_mutex);
-  for (const auto &entry : callbacks) {
+  for (const auto &entry : Callbacks()) {
     uintptr_t address = reinterpret_cast<uintptr_t>(entry->function) & ~uintptr_t{1};
     if (address >= start && address - start < size)
       return true;
   }
   return false;
+}
+
+void DobbyGetImageMonitorState(size_t &count, int &active) {
+  std::lock_guard<std::mutex> lock(callback_mutex);
+  count = Callbacks().size();
+  active = loader_target != nullptr;
 }
