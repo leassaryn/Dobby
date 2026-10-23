@@ -26,13 +26,13 @@
    ((uint64_t)(opr3) << 32) | ((uint64_t)(opr4) << 40))
 
 /* Get the operation in an encoding specification. */
-#define SPEC_INSN(spec) ((int16_t)((spec)&0xffff))
+#define SPEC_INSN(spec) ((int16_t)((spec) & 0xffff))
 
 /* Get the given operand (zero-based) in an encoding specification. */
-#define SPEC_OPERAND(spec, i) ((uint8_t)(((spec) >> (16 + (i)*8)) & 0xff))
+#define SPEC_OPERAND(spec, i) ((uint8_t)(((spec) >> (16 + (i) * 8)) & 0xff))
 
 /* Get the operands part of an encoding specification. */
-#define SPEC_OPERANDS(spec) ((spec)&0xffffffffffff0000ULL)
+#define SPEC_OPERANDS(spec) ((spec) & 0xffffffffffff0000ULL)
 
 /* Merges two encoding specifications. */
 #define SPEC_MERGE(spec1, spec2) ((spec1) | (spec2))
@@ -49,10 +49,9 @@
 
 #define op3_flag(x, f, o0, o1, o2)                                                                                     \
   {                                                                                                                    \
-    .name = #x, .flags = (f), .operands = {                                                                            \
-      {.data = #o0},                                                                                                   \
-      {.data = #o1},                                                                                                   \
-      {.data = #o2}},                                                                          \
+      .name = #x,                                                                                                      \
+      .flags = (f),                                                                                                    \
+      .operands = {{.data = #o0}, {.data = #o1}, {.data = #o2}},                                                       \
   }
 #define op2_flag(x, f, o0, o1) op3_flag(x, f, o0, o1, __)
 #define op1_flag(x, f, o0) op2_flag(x, f, o0, __)
@@ -441,8 +440,17 @@ static void x86_insn_decode_opcode(x86_insn_reader_t *rd, x86_insn_decode_t *ins
   uint8_t opcode = read_byte(rd);
 
   x86_insn_spec_t insn_spec;
+  if (opcode == 0xc4 || opcode == 0xc5 || opcode == 0x62) {
+    insn->unsupported = 1;
+    return;
+  }
   if (opcode == 0x0f) {
+    insn->two_byte_opcode = 1;
     opcode = read_byte(rd);
+    if (opcode == 0x38 || opcode == 0x3a) {
+      insn->unsupported = 1;
+      return;
+    }
     insn_spec = x86_opcode_map_two_byte[opcode];
   } else {
     insn_spec = x86_opcode_map_one_byte[opcode];
@@ -496,9 +504,8 @@ static void x86_insn_decode_opcode(x86_insn_reader_t *rd, x86_insn_decode_t *ins
         insn_spec.operands[i] = group_insn->operands[i];
       }
     }
-    DLOG(0, "[x86 decode] modrm_group_spec; group: %d, ins: %d, byte: %x; name: %s; flags: %d", group_ndx, insn_ndx, modrm.byte,
-         insn_spec.name,
-         insn_spec.flags);
+    DLOG(0, "[x86 decode] modrm_group_spec; group: %d, ins: %d, byte: %x; name: %s; flags: %d", group_ndx, insn_ndx,
+         modrm.byte, insn_spec.name, insn_spec.flags);
   }
 
   insn->primary_opcode = opcode;
@@ -568,16 +575,22 @@ void x86_insn_decode_immediate(x86_insn_reader_t *rd, x86_insn_decode_t *insn, x
   DLOG(0, "[x86 decode] imm_offs=%p, imm=%p", insn->immediate_offset, insn->immediate);
 }
 
-void x86_insn_decode(x86_insn_decode_t *insn, uint8_t *buffer, x86_options_t *conf) {
+void x86_insn_decode_bounded(x86_insn_decode_t *insn, uint8_t *buffer, size_t size, x86_options_t *conf) {
+  if (size > 15)
+    size = 15;
   // init reader
   x86_insn_reader_t rd;
-  init_reader(&rd, buffer, buffer + 15);
+  init_reader(&rd, buffer, buffer + size);
 
   // decode prefix
   insn->prefix = x86_insn_decode_prefix(&rd, insn, conf);
 
   // decode insn specp/x in
   x86_insn_decode_opcode(&rd, insn, conf);
+  if (insn->unsupported) {
+    insn->length = 0;
+    return;
+  }
 
   if (x86_insn_has_modrm_byte(&insn->insn_spec)) {
     // decode insn modrm sib (operand register, disp)
@@ -591,8 +604,14 @@ void x86_insn_decode(x86_insn_decode_t *insn, uint8_t *buffer, x86_options_t *co
 
   // set insn length
   insn->length = rd.buffer_cursor - rd.buffer;
+  if (insn->length > size || insn->length > 15 || !insn->insn_spec.name || !strcmp(insn->insn_spec.name, "bad"))
+    insn->length = 0;
 
 #if 1
   DLOG(0, "[x86 insn] opcode: %s, spec: %p, size: %d", insn->insn_spec.name, &insn->insn_spec, insn->length);
 #endif
+}
+
+void x86_insn_decode(x86_insn_decode_t *insn, uint8_t *buffer, x86_options_t *conf) {
+  x86_insn_decode_bounded(insn, buffer, 15, conf);
 }

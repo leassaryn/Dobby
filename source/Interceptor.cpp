@@ -2,46 +2,49 @@
 
 #include "dobby_internal.h"
 
+#include <vector>
+
 #if defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
 #include <pthread.h>
 #endif
 
-Interceptor *Interceptor::priv_interceptor_ = nullptr;
-Interceptor *Interceptor::priv_orig_interceptor_ = nullptr;
-
-Interceptor *Interceptor::SharedInstance() {
-  if (Interceptor::priv_interceptor_ == nullptr) {
-    Interceptor::priv_interceptor_ = new Interceptor();
-    INIT_LIST_HEAD(&Interceptor::priv_interceptor_->hook_entry_list_);
+namespace {
+struct HookOperationMutex {
+  pthread_mutex_t mutex;
+  HookOperationMutex() {
+    pthread_mutexattr_t attributes;
+    pthread_mutexattr_init(&attributes);
+    pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&mutex, &attributes);
+    pthread_mutexattr_destroy(&attributes);
   }
-  return Interceptor::priv_interceptor_;
+};
+
+pthread_mutex_t *OperationMutex() {
+  static HookOperationMutex state;
+  return &state.mutex;
+}
+} // namespace
+
+HookOperationGuard::HookOperationGuard() {
+  pthread_mutex_lock(OperationMutex());
 }
 
-Interceptor *Interceptor::SharedInstanceOriginal() {
-  if (Interceptor::priv_orig_interceptor_ == nullptr) {
-    Interceptor::priv_orig_interceptor_ = new Interceptor();
-    INIT_LIST_HEAD(&Interceptor::priv_orig_interceptor_->hook_entry_list_);
-  }
-  return Interceptor::priv_orig_interceptor_;
+HookOperationGuard::~HookOperationGuard() {
+  pthread_mutex_unlock(OperationMutex());
+}
+
+Interceptor *Interceptor::SharedInstance() {
+  static Interceptor interceptor;
+  return &interceptor;
 }
 
 void Interceptor::Lock() {
-#if defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
-  if (lock_ == NULL) {
-    pthread_mutex_t *mutex = new pthread_mutex_t;
-    pthread_mutex_init(mutex, NULL);
-    lock_ = mutex;
-  }
-  pthread_mutex_lock((pthread_mutex_t *)lock_);
-#endif
+  pthread_mutex_lock(OperationMutex());
 }
 
 void Interceptor::Unlock() {
-#if defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
-  if (lock_) {
-    pthread_mutex_unlock((pthread_mutex_t *)lock_);
-  }
-#endif
+  pthread_mutex_unlock(OperationMutex());
 }
 
 HookEntryNode *Interceptor::find_hook_entry_node(void *address) {
@@ -68,12 +71,9 @@ HookEntry *Interceptor::FindHookEntry(void *address) {
   HookEntryNode *entry_node = nullptr;
   Lock();
   entry_node = find_hook_entry_node(address);
+  HookEntry *entry = entry_node ? entry_node->entry : nullptr;
   Unlock();
-  if (entry_node) {
-    return entry_node->entry;
-  }
-
-  return nullptr;
+  return entry;
 }
 
 void Interceptor::AddHookEntry(HookEntry *entry) {
@@ -115,12 +115,16 @@ void Interceptor::Iterate(HookEntryIterator cb, void *userdata) {
   if (cb == NULL)
     return;
 
-  Lock();
-  HookEntryNode *entry_node = nullptr;
-  list_for_each_entry(entry_node, &hook_entry_list_, list_node) {
-    HookEntry *entry = entry_node->entry;
-    if (cb(entry->instruction_address, userdata) != 0)
+  std::vector<void *> addresses;
+  {
+    HookOperationGuard operation;
+    HookEntryNode *entry_node = nullptr;
+    list_for_each_entry(entry_node, &hook_entry_list_, list_node) {
+      addresses.push_back(entry_node->entry->instruction_address);
+    }
+  }
+  for (void *address : addresses) {
+    if (cb(address, userdata) != 0)
       break;
   }
-  Unlock();
 }

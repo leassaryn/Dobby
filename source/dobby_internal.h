@@ -2,6 +2,7 @@
 #define DOBBY_INTERNAL_H
 
 #include "dobby.h"
+#include "DobbyError.h"
 
 #include "logging/logging.h"
 #include "logging/check_logging.h"
@@ -33,7 +34,7 @@ typedef struct _AssemblyCodeChunkBuffer {
 
 typedef enum { kFunctionWrapper, kFunctionInlineHook, kDynamicBinaryInstrument } HookEntryType;
 
-typedef struct {
+typedef struct HookEntry {
   int id;
   int type;
 
@@ -44,6 +45,10 @@ typedef struct {
   };
 
   void *route;
+  void *patch_address;
+  bool needs_bti_prefix;
+  int near_policy; // -1: legacy global policy
+  size_t max_patch_bytes;
 
   // fixed-instructions which we relocated(patched)
   union {
@@ -52,6 +57,7 @@ typedef struct {
   };
 
   bool is_committed;
+  HookEntry *retired_next;
 
   AssemblyCodeChunkBuffer origin_chunk_;
 } HookEntry;

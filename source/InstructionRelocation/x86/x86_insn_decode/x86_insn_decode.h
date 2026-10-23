@@ -2,6 +2,7 @@
 #define X86_INSN_DECODE_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "common_header.h"
 
 typedef enum {
@@ -69,7 +70,7 @@ typedef struct {
   uint16_t flags;
 #define X86_INSN_FLAG_SET_SSE_GROUP(n) ((n) << 5)
 #define X86_INSN_FLAG_GET_SSE_GROUP(f) (((f) >> 5) & 0x1f)
-#define X86_INSN_FLAG_SET_MODRM_REG_GROUP(n) (((n)&0x3f) << 10)
+#define X86_INSN_FLAG_SET_MODRM_REG_GROUP(n) (((n) & 0x3f) << 10)
 #define X86_INSN_FLAG_GET_MODRM_REG_GROUP(f) (((f) >> 10) & 0x3f)
 } x86_insn_spec_t;
 
@@ -168,6 +169,8 @@ typedef struct x86_insn_decode_t {
 
     // insn primary opcode
     uint8_t primary_opcode;
+    uint8_t two_byte_opcode;
+    uint8_t unsupported;
 
     // insn modrm
     x86_insn_modrm_t modrm;
@@ -192,6 +195,7 @@ extern "C" {
 #endif
 
 void x86_insn_decode(x86_insn_decode_t *insn, uint8_t *buffer, x86_options_t *conf);
+void x86_insn_decode_bounded(x86_insn_decode_t *insn, uint8_t *buffer, size_t size, x86_options_t *conf);
 
 #ifdef __cplusplus
 }

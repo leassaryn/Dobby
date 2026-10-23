@@ -620,6 +620,11 @@ void gen_thumb_relocate_code(LiteMutableArray *relo_map, ThumbTurboAssembler *tu
   addr32_t execute_state_changed_pc = 0;
 
   while (buffer_cursor < ((addr_t)buffer + predefined_relocate_size)) {
+    // UDF/SVC are not conditional branches; reject before the branch rewriter.
+    if (!is_thumb2(instr) && ((instr & 0xff00) == 0xde00 || (instr & 0xff00) == 0xdf00)) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return;
+    }
     // align nop
     _ t1_nop();
 
@@ -770,6 +775,14 @@ relocate_remain:
 
     gen_thumb_relocate_code(&relo_map, &thumb_turbo_assembler_, buffer, &origin_chunk, relocated,
                             &execute_state_changed_pc);
+    if (DobbyGetLastError() != DOBBY_ERROR_NONE) {
+      thumb_turbo_assembler_.ClearCodeBuffer();
+      arm_turbo_assembler_.ClearCodeBuffer();
+      delete code_buffer;
+      for (size_t i = 0; i < relo_map.getCount(); ++i)
+        delete reinterpret_cast<ReloMapEntry *>(relo_map.getObject(i));
+      return;
+    }
     if (thumb_turbo_assembler_.GetExecuteState() == ARMExecuteState) {
       // relocate interrupt as execute state changed
       if (execute_state_changed_pc < origin_chunk.raw_instruction_start() + origin_chunk.raw_instruction_size()) {
@@ -847,6 +860,9 @@ relocate_remain:
 
     AssemblyCodeChunk *code = NULL;
     code = AssemblyCodeBuilder::FinalizeFromTurboAssembler(curr_assembler_);
+    delete cchunk;
+    if (!code)
+      return;
     relocated->re_init_region_range(code->raw_instruction_start(), code->raw_instruction_size());
     delete code;
   }

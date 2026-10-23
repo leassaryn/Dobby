@@ -32,12 +32,15 @@ void DynamicBinaryInstrumentRouting::BuildDynamicBinaryInstrumentRouting() {
 #endif
 
   closure_trampoline = ClosureTrampoline::CreateClosureTrampoline(entry_, handler);
+  closure_trampoline_ = closure_trampoline;
+  if (!closure_trampoline)
+    return;
   this->SetTrampolineTarget(closure_trampoline->address);
   DLOG(0, "[closure bridge] Carry data %p ", entry_);
   DLOG(0, "[closure bridge] Create prologue_dispatch_bridge %p", closure_trampoline->address);
 
   // generate trampoline buffer, run before `GenerateRelocatedCode`
-  GenerateTrampolineBuffer(entry_->target_address, GetTrampolineTarget());
+  GenerateTrampolineBuffer(entry_->patch_address, GetTrampolineTarget());
 }
 
 #if 0
@@ -45,3 +48,8 @@ void *DynamicBinaryInstrumentRouting::GetTrampolineTarget() {
   return this->prologue_dispatch_bridge;
 }
 #endif
+void DynamicBinaryInstrumentRouting::Destroy() {
+  delete closure_trampoline_;
+  closure_trampoline_ = nullptr;
+  InterceptRouting::Destroy();
+}

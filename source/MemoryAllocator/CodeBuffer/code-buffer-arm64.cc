@@ -3,6 +3,8 @@
 
 #include "MemoryAllocator/CodeBuffer/code-buffer-arm64.h"
 
+#include <cstring>
+
 arm64_inst_t CodeBuffer::LoadInst(int offset) {
   return *reinterpret_cast<int32_t *>(buffer + offset);
 }
@@ -21,7 +23,7 @@ void CodeBuffer::EmitInst(arm64_inst_t instr) {
 
 void CodeBuffer::Emit64(int64_t data) {
   ensureCapacity(getSize() + sizeof(int64_t));
-  *reinterpret_cast<int64_t *>(getCursor()) = data;
+  memcpy(getCursor(), &data, sizeof(data));
   buffer_cursor += sizeof(int64_t);
   return;
 }

@@ -4,6 +4,7 @@
 #include "InstructionRelocation/x86//X86InstructionRelocation.h"
 
 #include <string.h>
+#include "InstructionRelocation/x86/RelocationFixups.h"
 
 #include "dobby_internal.h"
 
@@ -31,50 +32,63 @@ static int GenRelocateCodeFixed(void *buffer, AssemblyCodeChunk *origin, Assembl
   conf.mode = 32;
 
   int predefined_relocate_size = origin->raw_instruction_size();
+  X86RelocationFixups fixups;
 
   while ((buffer_cursor < ((addr_t)buffer + predefined_relocate_size))) {
     int last_relo_offset = turbo_assembler_.GetCodeBuffer()->getSize();
 
     x86_insn_decode_t insn = {0};
     memset(&insn, 0, sizeof(insn));
-    // decode x86 insn
-    x86_insn_decode(&insn, (uint8_t *)buffer_cursor, &conf);
-
-    if (insn.primary_opcode >= 0x70 && insn.primary_opcode <= 0x7F) { // jc rel8
-      DLOG(0, "[x86 relo] jc rel8, %p", buffer_cursor);
-
-      int8_t orig_offset = insn.immediate;
-      int new_offset = (int)(curr_orig_ip + orig_offset - curr_relo_ip);
-      uint8_t opcode = 0x80 | (insn.primary_opcode & 0x0f);
-
-      __ Emit8(0x0F);
-      __ Emit8(opcode);
-      __ Emit32(new_offset);
-    } else if (insn.primary_opcode == 0xEB) { // jmp rel8
-      DLOG(0, "[x86 relo] jmp rel8, %p", buffer_cursor);
-
-      int8_t orig_offset = insn.immediate;
-      int8_t new_offset = (int8_t)(curr_orig_ip + orig_offset - curr_relo_ip);
-
-      __ Emit8(0xE9);
-      __ Emit32(new_offset);
-    } else if (insn.primary_opcode == 0xE8 || insn.primary_opcode == 0xE9) { // call or jmp rel32
-      DLOG(0, "[x86 relo] jmp or call rel32, %p", buffer_cursor);
-
-      dword orig_offset = insn.immediate;
-      dword offset = (dword)(curr_orig_ip + orig_offset - curr_relo_ip);
-
-      __ EmitBuffer((void *)buffer_cursor, insn.immediate_offset);
-      __ Emit32(offset);
-    } else if (insn.primary_opcode >= 0xE0 && insn.primary_opcode <= 0xE2) { // LOOPNZ/LOOPZ/LOOP/JECXZ
-      // LOOP/LOOPcc
-      UNIMPLEMENTED();
-    } else if (insn.primary_opcode == 0xE3) {
-      // JCXZ JCEXZ JCRXZ
-      UNIMPLEMENTED();
+    const size_t available = fixups.Readable(buffer_cursor);
+    if (!available) {
+      DobbySetError(DOBBY_ERROR_RELOCATION_FAILED);
+      return RT_FAILED;
+    }
+    x86_insn_decode_bounded(&insn, reinterpret_cast<uint8_t *>(buffer_cursor), available, &conf);
+    if (!insn.length || insn.unsupported) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return RT_FAILED;
+    }
+    fixups.offsets[curr_orig_ip] = turbo_assembler_.ip_offset();
+    const auto opcode = insn.primary_opcode;
+    const bool short_cond = !insn.two_byte_opcode && opcode >= 0x70 && opcode <= 0x7f;
+    const bool near_cond = insn.two_byte_opcode && opcode >= 0x80 && opcode <= 0x8f;
+    const bool short_jump = !insn.two_byte_opcode && opcode == 0xeb;
+    const bool near_jump = !insn.two_byte_opcode && (opcode == 0xe8 || opcode == 0xe9);
+    if (short_cond || near_cond || short_jump || near_jump) {
+      if ((insn.prefix & INSN_PREFIX_OPERAND_SIZE) && (near_cond || near_jump)) {
+        DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+        return RT_FAILED;
+      }
+      const int64_t displacement =
+          short_cond || short_jump ? static_cast<int8_t>(insn.immediate) : static_cast<int32_t>(insn.immediate);
+      const uint64_t target = curr_orig_ip + insn.length + displacement;
+      if (short_cond || near_cond) {
+        __ Emit8(0x0f);
+        __ Emit8(0x80 | (opcode & 15));
+      } else {
+        __ Emit8(opcode == 0xe8 ? 0xe8 : 0xe9);
+      }
+      const size_t position = turbo_assembler_.ip_offset();
+      __ Emit32(0);
+      fixups.entries.push_back({position, position + 4, target, true});
+    } else if (insn.flags & X86_INSN_DECODE_FLAG_IP_RELATIVE) {
+      if ((insn.prefix & INSN_PREFIX_ADDRESS_SIZE) || !insn.displacement_offset ||
+          insn.displacement_offset + 4 > insn.length) {
+        DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+        return RT_FAILED;
+      }
+      int32_t displacement;
+      memcpy(&displacement, reinterpret_cast<void *>(buffer_cursor + insn.displacement_offset), sizeof(displacement));
+      const size_t position = turbo_assembler_.ip_offset();
+      __ EmitBuffer(reinterpret_cast<void *>(buffer_cursor), insn.length);
+      fixups.entries.push_back({position + insn.displacement_offset, position + insn.length,
+                                curr_orig_ip + insn.length + displacement, false});
+    } else if (!insn.two_byte_opcode && opcode >= 0xe0 && opcode <= 0xe3) {
+      DobbySetError(DOBBY_ERROR_UNSUPPORTED_INSTRUCTION);
+      return RT_FAILED;
     } else {
-      // Emit the origin instrution
-      __ EmitBuffer((void *)buffer_cursor, insn.length);
+      __ EmitBuffer(reinterpret_cast<void *>(buffer_cursor), insn.length);
     }
 
     // go next
@@ -91,6 +105,10 @@ static int GenRelocateCodeFixed(void *buffer, AssemblyCodeChunk *origin, Assembl
 #endif
     curr_relo_ip = relocated->raw_instruction_start() + turbo_assembler_.ip_offset();
   }
+
+  if (!fixups.Resolve(turbo_assembler_.GetCodeBuffer(), origin->raw_instruction_start(), curr_orig_ip,
+                      relocated->raw_instruction_start(), false))
+    return RT_FAILED;
 
   // jmp to the origin rest instructions
   CodeGen codegen(&turbo_assembler_);
@@ -111,6 +129,8 @@ static int GenRelocateCodeFixed(void *buffer, AssemblyCodeChunk *origin, Assembl
   {
     AssemblyCodeChunk *code = NULL;
     code = AssemblyCodeBuilder::FinalizeFromTurboAssembler(&turbo_assembler_);
+    if (!code)
+      return RT_FAILED;
     delete code;
   }
 
@@ -138,11 +158,16 @@ x86_try_again:
     // free the cchunk
     MemoryArena::Destroy(cchunk);
 
+    if (DobbyGetLastError() != DOBBY_ERROR_NONE) {
+      relocated->re_init_region_range(0, 0);
+      return;
+    }
     relo_code_chunk_size += chunk_size_step;
     relocated->re_init_region_range(0, 0);
 
     goto x86_try_again;
   }
+  delete cchunk;
 }
 
 #endif

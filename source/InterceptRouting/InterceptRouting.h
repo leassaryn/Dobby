@@ -11,6 +11,8 @@ public:
   InterceptRouting(HookEntry *entry) : entry_(entry) {
     entry->route = this;
 
+    origin_ = NULL;
+    relocated_ = NULL;
     trampoline_ = NULL;
     trampoline_buffer_ = NULL;
     trampoline_target_ = NULL;
@@ -24,11 +26,21 @@ public:
 
   virtual void Prepare();
 
-  virtual void Active();
+  virtual void *GetUserReplacement() {
+    return trampoline_target_;
+  }
+  void *GetRelayAddress() const {
+    return trampoline_ ? trampoline_->address : nullptr;
+  }
+  void SetRelay(AssemblyCodeChunk *chunk) {
+    trampoline_ = chunk;
+  }
+
+  virtual bool Active();
 
   virtual void Destroy();
 
-  void Commit();
+  bool Commit();
 
   HookEntry *GetHookEntry();
 

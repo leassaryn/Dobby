@@ -18,6 +18,11 @@ using namespace zz::arm64;
 ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_data, void *carry_handler) {
   ClosureTrampolineEntry *entry = nullptr;
   entry = new ClosureTrampolineEntry;
+  void *bridge = get_closure_bridge();
+  if (!bridge) {
+    delete entry;
+    return nullptr;
+  }
 
 #define _ turbo_assembler_.
   TurboAssembler turbo_assembler_(0);
@@ -46,11 +51,15 @@ ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_d
   _ PseudoBind(&entry_label);
   _ EmitInt64((uint64_t)entry);
   _ PseudoBind(&forward_bridge_label);
-  _ EmitInt64((uint64_t)get_closure_bridge());
+  _ EmitInt64((uint64_t)bridge);
 
   AssemblyCodeChunk *code = nullptr;
   code = AssemblyCodeBuilder::FinalizeFromTurboAssembler(reinterpret_cast<AssemblerBase *>(&turbo_assembler_));
 
+  if (!code) {
+    delete entry;
+    return nullptr;
+  }
   entry->address = (void *)code->raw_instruction_start();
   entry->size = code->raw_instruction_size();
   entry->carry_data = carry_data;

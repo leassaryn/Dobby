@@ -18,7 +18,11 @@ public:
     this->handler = handler;
   }
 
-  void DispatchRouting();
+  void DispatchRouting() override;
+  void Destroy() override;
+  void *GetUserReplacement() override {
+    return handler;
+  }
 
 public:
   void *handler;
@@ -27,7 +31,7 @@ private:
   virtual void BuildDynamicBinaryInstrumentRouting();
 
 private:
-  void *prologue_dispatch_bridge;
+  ClosureTrampolineEntry *closure_trampoline_ = nullptr;
 
   ;
 };

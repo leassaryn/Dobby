@@ -5,6 +5,7 @@
 
 #include "dobby_internal.h"
 #include "Interceptor.h"
+#include "HookLifecycle.h"
 #include "InterceptRouting/InterceptRouting.h"
 
 #if defined(__linux__) || defined(__APPLE__)
@@ -22,40 +23,57 @@ PUBLIC const char *DobbyBuildVersion() {
 }
 
 PUBLIC int DobbyEnumerateHooks(dobby_hook_iterator_t cb, void *userdata) {
+  DobbySetError(DOBBY_ERROR_NONE);
   if (cb == NULL)
-    return RS_FAILED;
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
 
   Interceptor::SharedInstance()->Iterate(cb, userdata);
-  return RS_SUCCESS;
+  return DobbySuccess();
 }
 
 PUBLIC int DobbyDestroy(void *address) {
+  HookOperationGuard operation;
+  DobbySetError(DOBBY_ERROR_NONE);
+  if (!address)
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
   // check if we already hook
   HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
   if (entry) {
     if (entry->is_committed) {
       uint8_t *buffer = entry->origin_chunk_.chunk_buffer;
       uint32_t buffer_size = entry->origin_chunk_.chunk.length;
-#if defined(TARGET_ARCH_ARM)
-      address = (void *)((addr_t)address - 1);
-#endif
-      CodePatch(address, buffer, buffer_size);
-    }
-
-    // release routing resources (origin/relocated/trampoline buffers)
-    if (entry->route) {
-      InterceptRouting *route = (InterceptRouting *)entry->route;
-      route->Destroy();
-      delete route;
-      entry->route = NULL;
+      void *patch_address = entry->origin_chunk_.chunk.address;
+      if (CodePatch(patch_address, buffer, buffer_size) != kMemoryOperationSuccess)
+        return RT_FAILED;
     }
 
     Interceptor::SharedInstance()->RemoveHookEntry(address);
-
-    // release hook entry itself
-    delete entry;
+    RetireHook(entry);
     return RT_SUCCESS;
   }
 
-  return RT_FAILED;
+  return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
+}
+
+PUBLIC int DobbyQueryHook(void *address, DobbyHookInfo *info) {
+  HookOperationGuard operation;
+  DobbySetError(DOBBY_ERROR_NONE);
+  if (!address || !info || info->struct_size < sizeof(DobbyHookInfo))
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+  HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
+  if (!entry)
+    return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
+  auto *route = static_cast<InterceptRouting *>(entry->route);
+  DobbyHookInfo result{};
+  result.struct_size = sizeof(result);
+  result.kind = entry->type == kFunctionInlineHook ? DOBBY_HOOK_INLINE : DOBBY_HOOK_INSTRUMENT;
+  result.state = entry->is_committed ? DOBBY_HOOK_COMMITTED : DOBBY_HOOK_PREPARED;
+  result.target = entry->target_address;
+  result.patch_address = entry->origin_chunk_.chunk.address;
+  result.original = entry->relocated_origin_instructions;
+  result.replacement = route->GetUserReplacement();
+  result.patch_size = route->GetTrampolineBuffer()->getSize();
+  result.relay = route->GetRelayAddress();
+  *info = result;
+  return DobbySuccess();
 }

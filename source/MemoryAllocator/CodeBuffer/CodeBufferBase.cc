@@ -1,5 +1,7 @@
 #include "MemoryAllocator/CodeBuffer/CodeBufferBase.h"
 
+#include <cstring>
+
 #include "xnucxx/LiteMemOpt.h"
 
 CodeBufferBase *CodeBufferBase::Copy() {
@@ -20,7 +22,7 @@ void CodeBufferBase::Emit16(uint16_t value) {
   // Ensure the free space enough for the template T value
   this->ensureCapacity(sizeof(uint16_t) + this->getSize());
 
-  *reinterpret_cast<uint16_t *>(buffer_cursor) = value;
+  memcpy(buffer_cursor, &value, sizeof(value));
   buffer_cursor += sizeof(uint16_t);
 }
 
@@ -28,7 +30,7 @@ void CodeBufferBase::Emit32(uint32_t value) {
   // Ensure the free space enough for the template T value
   this->ensureCapacity(sizeof(uint32_t) + this->getSize());
 
-  *reinterpret_cast<uint32_t *>(buffer_cursor) = value;
+  memcpy(buffer_cursor, &value, sizeof(value));
   buffer_cursor += sizeof(uint32_t);
 }
 
@@ -36,7 +38,7 @@ void CodeBufferBase::Emit64(uint64_t value) {
   // Ensure the free space enough for the template T value
   this->ensureCapacity(sizeof(uint64_t) + this->getSize());
 
-  *reinterpret_cast<uint64_t *>(buffer_cursor) = value;
+  memcpy(buffer_cursor, &value, sizeof(value));
   buffer_cursor += sizeof(uint64_t);
 }
 

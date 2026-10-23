@@ -13,6 +13,11 @@ using namespace zz::arm;
 ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_data, void *carry_handler) {
   ClosureTrampolineEntry *entry = nullptr;
   entry = new ClosureTrampolineEntry;
+  void *bridge = get_closure_bridge();
+  if (!bridge) {
+    delete entry;
+    return nullptr;
+  }
 
 #ifdef ENABLE_CLOSURE_TRAMPOLINE_TEMPLATE
 #define CLOSURE_TRAMPOLINE_SIZE (7 * 4)
@@ -33,11 +38,15 @@ ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_d
   _ PseudoBind(&entry_label);
   _ EmitAddress((uint32_t)entry);
   _ PseudoBind(&forward_bridge_label);
-  _ EmitAddress((uint32_t)get_closure_bridge());
+  _ EmitAddress((uint32_t)bridge);
 
   AssemblyCodeChunk *code = nullptr;
   code = AssemblyCodeBuilder::FinalizeFromTurboAssembler(&turbo_assembler_);
 
+  if (!code) {
+    delete entry;
+    return nullptr;
+  }
   entry->address = (void *)code->raw_instruction_start();
   entry->size = code->raw_instruction_size();
   entry->carry_data = carry_data;

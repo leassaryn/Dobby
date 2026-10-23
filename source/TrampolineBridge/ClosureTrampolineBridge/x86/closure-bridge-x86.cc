@@ -12,6 +12,10 @@ using namespace zz::x86;
 
 static void *closure_bridge = NULL;
 
+void reset_closure_bridge() {
+  closure_bridge = nullptr;
+}
+
 void *get_closure_bridge() {
   // if already initialized, just return.
   if (closure_bridge)
@@ -102,7 +106,10 @@ void *get_closure_bridge() {
   _ RelocBind();
 
   AssemblyCodeChunk *code = AssemblyCodeBuilder::FinalizeFromTurboAssembler(&turbo_assembler_);
+  if (!code)
+    return nullptr;
   closure_bridge = (void *)code->raw_instruction_start();
+  delete code;
 
   DLOG(0, "[closure bridge] Build the closure bridge at %p", closure_bridge);
 #endif

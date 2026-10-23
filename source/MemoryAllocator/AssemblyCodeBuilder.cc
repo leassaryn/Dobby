@@ -41,7 +41,10 @@ AssemblyCodeChunk *AssemblyCodeBuilder::FinalizeFromTurboAssembler(AssemblerBase
 
   // Realize(Relocate) the buffer_code to the executable_memory_address, remove the ExternalLabels, etc, the pc-relative
   // instructions
-  CodePatch(realized_address, (uint8_t *)buffer->getRawBuffer(), buffer->getSize());
+  if (CodePatch(realized_address, (uint8_t *)buffer->getRawBuffer(), buffer->getSize()) != kMemoryOperationSuccess) {
+    delete result;
+    return nullptr;
+  }
 
   return result;
 }

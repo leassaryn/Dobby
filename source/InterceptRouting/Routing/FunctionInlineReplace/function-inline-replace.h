@@ -16,8 +16,6 @@ public:
 
   void DispatchRouting() override;
 
-  void SetReplaceCall(void *new_replace_call);
-
 private:
   virtual void BuildReplaceRouting();
 

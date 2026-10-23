@@ -20,6 +20,16 @@ struct IndirectStub {
 
 LiteMutableArray *existing_indirect_stubs;
 
+void ResetIndirectStubs() {
+  if (!existing_indirect_stubs)
+    return;
+  LiteCollectionIterator iterator(existing_indirect_stubs);
+  while (auto *stub = reinterpret_cast<IndirectStub *>(iterator.getNextObject()))
+    delete stub;
+  delete existing_indirect_stubs;
+  existing_indirect_stubs = nullptr;
+}
+
 static void **AllocIndirectStub(addr_t branch_address) {
   if (!existing_indirect_stubs) {
     existing_indirect_stubs = new LiteMutableArray(10);
@@ -39,6 +49,7 @@ static void **AllocIndirectStub(addr_t branch_address) {
       NearMemoryArena::AllocateDataChunk((addr_t)branch_address, (size_t)2 * 1024 * 1024 * 1024, (int)sizeof(void *));
   if (forwardStub == nullptr) {
     ERROR_LOG("Not found near forward stub");
+    DobbySetError(DOBBY_ERROR_NEAR_ALLOCATION_FAILED);
     return NULL;
   }
 
@@ -46,7 +57,8 @@ static void **AllocIndirectStub(addr_t branch_address) {
   stub->branch_address = branch_address;
   stub->stub_address = forwardStub->address;
   existing_indirect_stubs->pushObject(reinterpret_cast<LiteObject *>(stub));
-  return (void **)forwardStub->address;
+  delete forwardStub;
+  return (void **)stub->stub_address;
 }
 
 CodeBufferBase *GenerateNormalTrampolineBuffer(addr_t from, addr_t to) {
@@ -55,6 +67,8 @@ CodeBufferBase *GenerateNormalTrampolineBuffer(addr_t from, addr_t to) {
 
   // branch
   void **branch_stub = AllocIndirectStub(from);
+  if (!branch_stub)
+    return nullptr;
   *branch_stub = (void *)to;
 
   CodeGen codegen(&turbo_assembler_);

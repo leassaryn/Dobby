@@ -17,6 +17,8 @@ public:
   static int PushPage(addr_t page_addr, MemoryPermission permission);
 
   static void Destroy(MemoryChunk *chunk);
+  static size_t RetainedBytes();
+  static bool ReleaseAll(size_t &released_bytes);
 
   // Serialize concurrent allocations on the shared near-page pool.
   static void Lock();
@@ -26,7 +28,7 @@ public:
 private:
   static LiteMutableArray *page_chunks;
 
-  static void *lock_;
+  static pthread_mutex_t lock_;
 };
 
 #endif

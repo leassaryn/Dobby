@@ -1,12 +1,14 @@
 #include "InterceptRouting/Routing/DynamicBinaryInstrument/intercept_routing_handler.h"
 
 #include "dobby_internal.h"
+#include "HookLifecycle.h"
 
 #include "InterceptRouting/Routing/DynamicBinaryInstrument/dynamic-binary-instrument.h"
 
 #include "TrampolineBridge/ClosureTrampolineBridge/common-bridge-handler.h"
 
 void instrument_call_forward_handler(RegisterContext *ctx, HookEntry *entry) {
+  InstrumentCallbackScope callback_scope;
   DynamicBinaryInstrumentRouting *route = (DynamicBinaryInstrumentRouting *)entry->route;
   if (route->handler) {
     DBICallTy handler;

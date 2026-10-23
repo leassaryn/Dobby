@@ -5,6 +5,8 @@
 
 #include "PlatformUnifiedInterface/StdMemory.h"
 
+#include <pthread.h>
+
 struct MemoryChunk : MemoryRange {
   inline void init_region_range(addr_t address, size_t size) {
     this->address = (void *)address;
@@ -34,7 +36,7 @@ typedef struct {
   MemoryChunk page;
   addr_t page_cursor;
   MemoryPermission permission;
-  LiteMutableArray *chunks;
+
 } PageChunk;
 
 class MemoryArena {
@@ -46,6 +48,8 @@ public:
   static AssemblyCodeChunk *AllocateCodeChunk(int alloc_size);
 
   static void Destroy(MemoryChunk *chunk);
+  static size_t RetainedBytes();
+  static bool ReleaseAll(size_t &released_bytes);
 
   // Serialize concurrent allocations on the shared page pool.
   static void Lock();
@@ -55,7 +59,7 @@ public:
 public:
   static LiteMutableArray *page_chunks;
 
-  static void *lock_;
+  static pthread_mutex_t lock_;
 };
 
 #endif

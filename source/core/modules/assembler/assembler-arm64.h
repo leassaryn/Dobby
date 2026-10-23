@@ -470,7 +470,7 @@ public:
   }
 
   void ldr(const CPURegister &rt, const MemOperand &src) {
-    LoadStore(OP_X(LDR), rt, src);
+    LoadStore(rt.type() == CPURegister::kRegister_W ? OP_W(LDR) : OP_X(LDR), rt, src);
   }
 
   void ldrsw(const Register &rt, const MemOperand &src) {

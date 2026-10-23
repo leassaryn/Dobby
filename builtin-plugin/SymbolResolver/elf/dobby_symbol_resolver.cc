@@ -1,5 +1,6 @@
 #include "SymbolResolver/dobby_symbol_resolver.h"
 #include "dobby.h"
+#include "DobbyError.h"
 #include "common_header.h"
 
 #include <elf.h>
@@ -296,15 +297,16 @@ PUBLIC void *DobbySymbolResolver(const char *image_name, const char *symbol_name
 // NULL) then hook it immediately. Returns RS_FAILED if the symbol cannot be
 // resolved or if the hook itself fails.
 PUBLIC int DobbyHookByName(const char *image_name, const char *symbol_name, void *replace_call, void **origin_call) {
+  DobbySetError(DOBBY_ERROR_NONE);
   if (symbol_name == NULL || replace_call == NULL) {
     ERROR_LOG("invalid DobbyHookByName arguments");
-    return RS_FAILED;
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
   }
 
   void *address = DobbySymbolResolver(image_name, symbol_name);
   if (address == NULL) {
     ERROR_LOG("symbol %s not found in %s", symbol_name, image_name ? image_name : "any module");
-    return RS_FAILED;
+    return DobbyFailure(DOBBY_ERROR_NOT_FOUND);
   }
 
   return DobbyHook(address, replace_call, origin_call);

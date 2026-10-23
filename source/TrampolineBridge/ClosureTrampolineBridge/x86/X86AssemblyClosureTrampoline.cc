@@ -13,9 +13,15 @@ using namespace zz::x86;
 ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_data, void *carry_handler) {
   ClosureTrampolineEntry *entry = nullptr;
   entry = new ClosureTrampolineEntry;
+  void *bridge = get_closure_bridge();
+  if (!bridge) {
+    delete entry;
+    return nullptr;
+  }
 
   AssemblyCodeChunk *cchunk = MemoryArena::AllocateCodeChunk(32);
   if (cchunk == nullptr) {
+    delete entry;
     return NULL;
   }
 
@@ -23,7 +29,7 @@ ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_d
 #define __ turbo_assembler_.GetCodeBuffer()->
   TurboAssembler turbo_assembler_(cchunk->address);
 
-  int32_t offset = (int32_t)get_closure_bridge() - ((int32_t)cchunk->address + 18);
+  int32_t offset = (int32_t)bridge - ((int32_t)cchunk->address + 18);
 
   _ sub(esp, Immediate(4, 32));
   _ mov(Address(esp, 4 * 0), Immediate((int32_t)entry, 32));
@@ -35,7 +41,13 @@ ClosureTrampolineEntry *ClosureTrampoline::CreateClosureTrampoline(void *carry_d
   entry->carry_handler = carry_handler;
 
   CodeBufferBase *buffer = reinterpret_cast<CodeBufferBase *>(turbo_assembler_.GetCodeBuffer());
-  CodePatch(cchunk->address, (uint8_t *)buffer->getRawBuffer(), buffer->getSize());
+  const bool patched =
+      CodePatch(cchunk->address, (uint8_t *)buffer->getRawBuffer(), buffer->getSize()) == kMemoryOperationSuccess;
+  delete cchunk;
+  if (!patched) {
+    delete entry;
+    return nullptr;
+  }
 
   return entry;
 }

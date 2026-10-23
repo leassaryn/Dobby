@@ -18,8 +18,6 @@ class Interceptor {
 public:
   static Interceptor *SharedInstance();
 
-  static Interceptor *SharedInstanceOriginal();
-
   HookEntry *FindHookEntry(void *address);
 
   void AddHookEntry(HookEntry *entry);
@@ -28,7 +26,7 @@ public:
 
   int GetHookEntryCount();
 
-  // Invoke `cb` for every registered hook entry while holding the lock.
+  // Invoke callbacks on an address snapshot without holding the registry lock.
   void Iterate(HookEntryIterator cb, void *userdata);
 
   // Protect concurrent hook/destroy from racing on the hook-entry list.
@@ -38,19 +36,22 @@ public:
 
 private:
   Interceptor() {
-    lock_ = NULL;
+    INIT_LIST_HEAD(&hook_entry_list_);
   }
 
   HookEntryNode *find_hook_entry_node(void *address);
 
 private:
   struct list_head hook_entry_list_;
+};
 
-  void *lock_;
-
-  static Interceptor *priv_interceptor_;
-
-  static Interceptor *priv_orig_interceptor_;
+// Serialize complete setup/commit/destroy operations, including nested public calls.
+class HookOperationGuard {
+public:
+  HookOperationGuard();
+  ~HookOperationGuard();
+  HookOperationGuard(const HookOperationGuard &) = delete;
+  HookOperationGuard &operator=(const HookOperationGuard &) = delete;
 };
 
 #endif

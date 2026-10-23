@@ -29,8 +29,7 @@ public:
   static LiteMutableArray *plugins;
 
   static RoutingPluginInterface *near_branch_trampoline;
+  static bool automatic_near_branch;
 };
-
-
 
 #endif

@@ -1,41 +1,45 @@
-## Dobby 
+# Dobby for Android
 
-[![Contact me Telegram](https://img.shields.io/badge/Contact%20me-Telegram-blue.svg)](https://t.me/IOFramebuffer) [![Join group Telegram](https://img.shields.io/badge/Join%20group-Telegram-brightgreen.svg)](https://t.me/dobby_group)  
+An Android-focused fork of [Dobby](https://github.com/jmpews/Dobby), a runtime
+hook framework for **arm64-v8a, armeabi-v7a, x86 and x86_64**. It builds a static
+library by default, with a shared-library option, using C++23/C23.
 
-Dobby a lightweight, multi-architecture exploit hook framework for Android/Linux.
+- Inline hooks, staged prepare/commit and register-context instrumentation.
+- Automatic ARM64 near trampolines for short methods, with conservative fallback checks.
+- Versioned per-hook options, patch-size limits and batch installation with rollback.
+- ELF PLT/GOT import hooks, explicit module pins and removable loader callbacks.
+- Thread-local diagnostics, runtime capabilities, hook inspection and resource teardown.
+- Capstone/Unicorn differential relocation tests, seeded fuzzing/replay and an optional benchmark.
+- Optional ELF symbol resolution, linker-load callbacks and Bionic linker integration.
+- CMake `Dobby::dobby` target and installable `find_package(Dobby CONFIG)` package.
 
-- Minimal and modular library
-- Multiple architecture support(X86, X86-64, ARM, ARM64)
-- Clean code without STL(port to kernel easily)
-- Plugin support(SymbolResolver, BionicLinkerRestriction, LinkerLoadCallback)
+## Build
 
-## Getting started
+Use CMake 3.22+ and a C++23-capable Android NDK (r26 or newer; validation uses r29):
 
+```sh
+cmake -S . -B build/arm64-v8a \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
+  -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
+cmake --build build/arm64-v8a --target dobby --parallel 4
 ```
-git clone https://github.com/jmpews/Dobby.git --depth=1
-cd Dobby/example/
-mkdir build; cd build; cmake ..
-```
 
-Or download [latest release](https://github.com/jmpews/Dobby/releases/tag/latest)
+See [build and device tests](docs/build-documentation.md),
+[API and migration guide](docs/api.md), [verification matrix](docs/compatibility.md),
+and the public [header](include/dobby.h).
+Android is the supported release target. The Linux CMake path is only a local
+development convenience; POSIX/Linux implementation files are required by Android.
 
-#### [Build Installation](docs/build-documentation.md)
-
-#### [Getting Started with Android](docs/get-started-android.md)
-
-## Documentation
-
-[full Installation documentation site](https://jmpews.github.io/Dobby/#/)
-
-## Download
-
-[download static library](https://github.com/jmpews/Dobby/releases/tag/latest)
+Install/remove hooks at a safe point when other threads are not executing the
+patched bytes. A successful build alone does not establish runtime compatibility
+with every Android version, page size, BTI/PAC configuration or IL2CPP prologue.
 
 ## Credits
 
-1. [frida-gum](https://github.com/frida/frida-gum)
-2. [minhook](https://github.com/TsudaKageyu/minhook)
-3. [substrate](https://github.com/jevinskie/substrate).
-4. [v8](https://github.com/v8/v8)
-5. [dart](https://github.com/dart-lang/sdk)
-6. [vixl](https://git.linaro.org/arm/vixl.git)
+Upstream Dobby and its contributors, plus projects that informed its implementation:
+[frida-gum](https://github.com/frida/frida-gum),
+[minhook](https://github.com/TsudaKageyu/minhook),
+[substrate](https://github.com/jevinskie/substrate),
+[V8](https://github.com/v8/v8), [Dart](https://github.com/dart-lang/sdk), and
+[VIXL](https://github.com/Linaro/vixl).

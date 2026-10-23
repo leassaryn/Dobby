@@ -9,14 +9,15 @@
 using namespace zz;
 
 PUBLIC void dobby_enable_near_branch_trampoline() {
-  RoutingPluginInterface *plugin = new NearBranchTrampolinePlugin;
-  RoutingPluginManager::registerPlugin("near_branch_trampoline", plugin);
-  RoutingPluginManager::near_branch_trampoline = plugin;
+  HookOperationGuard operation;
+  RoutingPluginManager::automatic_near_branch = true;
+  static NearBranchTrampolinePlugin plugin;
+  RoutingPluginManager::near_branch_trampoline = &plugin;
 }
 
 PUBLIC void dobby_disable_near_branch_trampoline() {
-  NearBranchTrampolinePlugin *plugin = (NearBranchTrampolinePlugin *)RoutingPluginManager::near_branch_trampoline;
-  delete plugin;
+  HookOperationGuard operation;
+  RoutingPluginManager::automatic_near_branch = false;
   RoutingPluginManager::near_branch_trampoline = NULL;
 }
 

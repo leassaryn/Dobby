@@ -1,77 +1,169 @@
-# Build
+# Build and verification
 
-Dobby targets **Android only** (ABIs: arm64-v8a, armeabi-v7a, x86, x86_64). It builds with **C++23** (`.cpp`) and **C23** (`.c`).
+Supported artifacts target Android: arm64-v8a, armeabi-v7a, x86 and x86_64.
+Use CMake 3.22+, C++23/C23 and NDK r26 or newer. Current validation uses r29.
+The NDK toolchain supplies the system/processor values required by
+`cmake/EarlyGlobals.cmake`.
 
-## CMake build options
+## Configure and build
 
-```
-option(DOBBY_GENERATE_SHARED "Build shared library" OFF)
-
-option(DOBBY_DEBUG "Enable debug logging" OFF)
-
-option(NearBranch "Enable Near Branch Trampoline" ON)
-
-option(DynamicBinaryInstrument "Enable Dynamic Binary Instrument" ON)
-
-option(FullFloatingPointRegisterPack "Save and pack all floating-point registers" ON)
-
-option(Plugin.SymbolResolver "Resolve symbol by [DobbySymbolResolver] " ON)
-
-option(Plugin.LinkerLoadCallback "Register image load callback " ON)
-
-option(Plugin.Android.BionicLinkerRestriction "Enable android bionic linker restriction" OFF)
+```sh
+cmake -S . -B build/arm64-v8a \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
+  -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release \
+  -DDOBBY_GENERATE_SHARED=OFF -DDOBBY_DEBUG=OFF \
+  -DPlugin.Android.BionicLinkerRestriction=ON
+cmake --build build/arm64-v8a --target dobby --parallel 4
 ```
 
-## Build script (preferred for Android)
+Repeat with each ABI and a distinct build directory. Set
+`DOBBY_GENERATE_SHARED=ON` for `libdobby.so` instead of `libdobby.a`.
+Other options: `NearBranch`, `DynamicBinaryInstrument`,
+`FullFloatingPointRegisterPack`, `Plugin.SymbolResolver`,
+`Plugin.LinkerLoadCallback`. These default ON; BionicLinkerRestriction defaults
+OFF. NearBranch is forced ON for x86/x64. Debug builds enable debug logging.
 
-`build-workspace/auto-build.sh` builds static libs for all 4 ABIs
-(arm64-v8a, armeabi-v7a, x86, x86_64) and copies them into `build-workspace/prefab/`.
+`ANDROID_NDK_HOME=<ndk> sh build-workspace/auto-build.sh` builds all four static
+libraries. Run from the repository root: outputs go to `auto-build-workspace/`
+and `auto-build-output/`, with copies in root-level `prefab/`. The script replaces
+its summary output directory; it does not strip archives.
 
-Requires `ANDROID_NDK_HOME` (not `ANDROID_NDK`), and an NDK >= r26 for C++23:
+The external Termux helper `~/.local/bin/build` can also configure the toolchain.
+Its explicit four-ABI selection is `--abi arm64-v8a,armeabi-v7a,x86,x86_64`;
+its `--abi all` currently selects only ARM ABIs.
 
+## Integrate with an application
+
+Inside an Android CMake project:
+
+```cmake
+add_subdirectory(path/to/Dobby dobby-build)
+target_link_libraries(native-lib PRIVATE Dobby::dobby)
 ```
-ANDROID_NDK_HOME=<ndk> build-workspace/auto-build.sh
+
+Or install one ABI/configuration into its own prefix:
+
+```sh
+cmake --install build/arm64-v8a --prefix "$PWD/build/install/arm64-v8a"
 ```
 
-## Build for Android (manual)
+Configure the consuming Android project with
+`-DDobby_DIR=<prefix>/lib/cmake/Dobby`. The NDK restricts package searches to its
+root paths, so `CMAKE_PREFIX_PATH` alone may not locate an external install:
 
-```
-export ANDROID_NDK=/path/to/android-sdk/ndk/<version>
-
-cd Dobby && mkdir build_for_android_arm64 && cd build_for_android_arm64
-
-cmake .. \
--DCMAKE_BUILD_TYPE=Release \
--DCMAKE_SYSTEM_NAME=Android -DCMAKE_ANDROID_ARCH_ABI="arm64-v8a" -DCMAKE_ANDROID_NDK=$ANDROID_NDK -DCMAKE_SYSTEM_VERSION=21 -DCMAKE_ANDROID_NDK_TOOLCHAIN_VERSION=clang
-
-make -j4 dobby
+```cmake
+find_package(Dobby CONFIG REQUIRED)
+target_link_libraries(native-lib PRIVATE Dobby::dobby)
 ```
 
-For ARM (32-bit) replace `arm64-v8a` with `armeabi-v7a` (and `-DCMAKE_SYSTEM_VERSION=16`).
+The target exports the public header directory and link requirements. Do not copy
+Dobby's private include paths. The 64-bit target adds a 16 KB maximum ELF page
+alignment link option, also propagated to consumers. APK packaging and all other
+native dependencies still need independent checks; see Android's
+[16 KB page-size guide](https://developer.android.com/guide/practices/page-sizes)
+and the [NDK r28 changes](https://github.com/android/ndk/wiki/Changelog-r28).
 
-## Android Studio CMake
+## Runtime tests
 
+Add `-DDOBBY_BUILD_TESTS=ON` and build these targets:
+
+- `dobby_api_compatibility_test`: real hook/original calls, thread-local errors,
+  prepared/committed snapshots, retirement, teardown and reinstall. ARM includes
+  ARM and Thumb fixtures; ARM64 with NearBranch includes short adjacent methods,
+  loader stubs, BTI landing pads and PAC prologues.
+- `dobby_linker_callback_test`: lazy registration, callback deduplication, reentry
+  and successful/failed real `dlopen` calls (when the plugin is enabled).
+- `dobby_public_api_c_test`: C23 header and diagnostic/resource API linkage.
+- `dobby_hook_safety_test`: ARM64 with DBI and NearBranch; internal branches,
+  inaccessible page boundaries, conflicting/concurrent setup, callback reentry,
+  patch failures and restoration of different page permissions.
+
+Build executable targets in `build/<abi>` directories, then run on an attached
+authorized Android device:
+
+```sh
+python3 scripts/run-android-tests.py --build-root build \
+  --output build/android-test-results.json
 ```
-if(NOT TARGET dobby)
-set(DOBBY_DIR /path/to/Dobby)
-macro(SET_OPTION option value)
-  set(${option} ${value} CACHE INTERNAL "" FORCE)
-endmacro()
-SET_OPTION(DOBBY_DEBUG OFF)
-SET_OPTION(DOBBY_GENERATE_SHARED OFF)
-add_subdirectory(${DOBBY_DIR} dobby)
-get_property(DOBBY_INCLUDE_DIRECTORIES
-  TARGET dobby
-  PROPERTY INCLUDE_DIRECTORIES)
-include_directories(
-  .
-  ${DOBBY_INCLUDE_DIRECTORIES}
-  $<TARGET_PROPERTY:dobby,INCLUDE_DIRECTORIES>
-)
-endif()
 
-add_library(native-lib SHARED
-  ${DOBBY_DIR}/example/android_common_api.cc
+Use `--local` inside Android/Termux or `--serial <adb-serial>` with adb. The runner
+executes supported ABIs and reports unavailable ones as skipped. An explicitly
+requested unsupported `--abi` fails. JSON records actual page size, feature
+coverage, exit status and logs. Cross-compiling executables does not run them.
+CTest is useful only where those Android executables can execute locally.
 
-  native-lib.cpp)
+Require actual feature coverage on a suitable ARM64 device:
+
+```sh
+python3 scripts/run-android-tests.py --build-root build --abi arm64-v8a \
+  --require-16k --require-bti --require-pac \
+  --output build/android-required-features.json
 ```
+
+These flags fail when required capabilities are absent. Without them, unavailable
+BTI/PAC tests are reported as skipped. Hardware capability discovery follows
+[Linux ARM64 HWCAP](https://www.kernel.org/doc/html/v6.13/arch/arm64/elf_hwcaps.html).
+Patching preserves BTI/MTE flags reported by
+[`/proc/self/smaps`](https://www.kernel.org/doc/html/v6.8/filesystems/proc.html).
+A passing fixture covers the sequences tested, not every compiler-generated
+prologue or instruction extension.
+
+CI build workflow covers all ABIs, Debug/Release and static/shared libraries and
+builds device executables. The manual `android-device-tests.yml` workflow requires
+a self-hosted runner labeled `android-device`, adb, `ANDROID_NDK_HOME`, CMake,
+Python and an attached device. It uploads measured JSON. Hosted build jobs do not
+claim runtime coverage. The legacy `tests/InstructionRelocation/` project remains
+outside this supported test path.
+
+## Sanitizers
+
+Use a separate ARM64 build with these additional CMake options:
+
+```sh
+-DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer"
+-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer"
+-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined
+```
+
+Run the compatibility and safety executables with the NDK ASan runtime directory
+on `LD_LIBRARY_PATH`, `ASAN_OPTIONS=detect_leaks=0` and
+`UBSAN_OPTIONS=halt_on_error=1`. Generated code has no compiler function-type
+metadata, so the function-type check is excluded. LeakSanitizer is unsupported
+on the Android environment used here; this is memory-access/UB validation, not a
+heap leak certification. Resource tests separately verify pool counters return
+to zero and hooks work again after explicit teardown.
+
+See [API contracts](api.md) for thread safety, pointer lifetimes, error handling
+and safe collection requirements.
+
+## Capstone + Unicorn relocation checks
+
+`DOBBY_BUILD_RELOCATION_EMULATOR_TESTS=ON` adds a native ARM64 differential
+test against the real relocation generator, with Capstone/Unicorn discovered via
+`pkg-config`. It compares full relevant CPU state and data/stack memory, checks
+internal branches against poisoned original bytes, and includes a mutation
+control. Build with NearBranch ON and OFF for near/far placement coverage.
+See [the relocation test guide](../tests/relocation/README.md). This test-only
+option is OFF by default and is separate from the NDK/device build matrix.
+
+
+## Modern API tests and benchmark
+
+The normal test build includes `dobby_modern_api_test` and
+`libdobby_test_importer.so`. Keep the fixture beside the executable when deploying;
+the device runner copies it automatically. Coverage includes versioned options,
+batch prepare/commit rollback, module pins, real RELRO import slots and callback
+ownership. Static tests additionally inject commit/rollback mprotect failures.
+
+Configure `-DDOBBY_BUILD_BENCHMARKS=ON`, build `dobby_hook_benchmark`, and execute it
+on the target Android device. It outputs JSON with median baseline/inline/DBI
+call time, installation lifecycle time, near allocation outcomes and retained
+pool capacity. Results depend on device load, compiler and power state; they are
+measurements, not performance guarantees. Capability detection is also available
+through `DobbyGetRuntimeInfo` without running a benchmark.
+
+The optional native emulator configuration also builds the x86/x64 relocation
+tests. Run CTest for the fixed corpus and use `--cases`/`--seed`/`--replay` on the
+ARM64 executable for reproducible fuzzing; see its README. These dependencies
+remain absent from production library linkage.

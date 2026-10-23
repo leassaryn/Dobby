@@ -5,17 +5,26 @@
 #include "InterceptRouting/Routing/FunctionInlineReplace/function-inline-replace.h"
 
 PUBLIC int DobbyHook(void *address, void *replace_call, void **origin_call) {
+  HookOperationGuard operation;
+  DobbySetError(DOBBY_ERROR_NONE);
   int result = DobbyPrepare(address, replace_call, origin_call);
   if (result != RS_SUCCESS)
     return result;
   return DobbyCommit(address);
 }
 
-PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
-  if (!address) {
-    ERROR_LOG("function address is 0x0");
-    return RS_FAILED;
+static int Prepare(void *address, void *replace_call, void **origin_call, int near_policy, size_t max_patch_bytes) {
+  HookOperationGuard operation;
+  DobbySetError(DOBBY_ERROR_NONE);
+  if (!address || !replace_call) {
+    ERROR_LOG("function address or replacement is null");
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
   }
+
+#if defined(TARGET_ARCH_ARM64)
+  if ((reinterpret_cast<uintptr_t>(address) & 3) != 0)
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+#endif
 
   DLOG(0, "[DobbyPrepare] Initialize at %p", address);
 
@@ -25,40 +34,27 @@ PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
     // reject conflicts: this address is already hooked with a different mechanism
     if (entry->type != kFunctionInlineHook) {
       ERROR_LOG("address %p is already instrumented; destroy it before hooking", address);
-      return RS_FAILED;
+      return DobbyFailure(DOBBY_ERROR_CONFLICT);
     }
     FunctionInlineReplaceRouting *route = (FunctionInlineReplaceRouting *)entry->route;
     if (route->GetTrampolineTarget() == replace_call) {
+      if (near_policy != -1 && (entry->near_policy != near_policy || entry->max_patch_bytes != max_patch_bytes))
+        return DobbyFailure(DOBBY_ERROR_CONFLICT);
       // idempotent: already hooked with the same replacement; succeed as a no-op
       if (origin_call)
         *origin_call = entry->relocated_origin_function;
-      return RS_SUCCESS;
+      return DobbySuccess();
     }
-  }
-
-  // check if was previously hooked and rehook if needed
-  entry = Interceptor::SharedInstanceOriginal()->FindHookEntry(address);
-  if (entry) {
-    if (entry->type != kFunctionInlineHook) {
-      ERROR_LOG("address %p is already instrumented; destroy it before hooking", address);
-      return RS_FAILED;
-    }
-    FunctionInlineReplaceRouting *route = (FunctionInlineReplaceRouting *)entry->route;
-    if (route->GetTrampolineTarget() != replace_call) {
-      // no need to regenerate relocated buffer because its size and contents are the same
-      // TODO: Check ARM
-      route->SetReplaceCall(replace_call);
-    }
-    Interceptor::SharedInstance()->AddHookEntry(entry);
-    if (origin_call)
-      *origin_call = entry->relocated_origin_function;
-    return RS_SUCCESS;
+    ERROR_LOG("address %p already has a different replacement; destroy it before hooking", address);
+    return DobbyFailure(DOBBY_ERROR_CONFLICT);
   }
 
   entry = new HookEntry();
   entry->id = Interceptor::SharedInstance()->GetHookEntryCount();
   entry->type = kFunctionInlineHook;
   entry->function_address = address;
+  entry->near_policy = near_policy;
+  entry->max_patch_bytes = max_patch_bytes;
 
   FunctionInlineReplaceRouting *route = new FunctionInlineReplaceRouting(entry, replace_call);
   route->Prepare();
@@ -70,6 +66,8 @@ PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
     route->Destroy();
     delete route;
     delete entry;
+    if (DobbyGetLastError() == DOBBY_ERROR_NONE)
+      DobbySetError(DOBBY_ERROR_RELOCATION_FAILED);
     return RS_FAILED;
   }
 
@@ -79,28 +77,50 @@ PUBLIC int DobbyPrepare(void *address, void *replace_call, void **origin_call) {
   if (origin_call)
     *origin_call = entry->relocated_origin_function;
 
-  return RS_SUCCESS;
+  return DobbySuccess();
 }
 
 PUBLIC int DobbyCommit(void *address) {
+  HookOperationGuard operation;
+  DobbySetError(DOBBY_ERROR_NONE);
   if (!address) {
     ERROR_LOG("function address is 0x0");
-    return RS_FAILED;
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
   }
 
   // check if already hooked
   HookEntry *entry = Interceptor::SharedInstance()->FindHookEntry(address);
   if (!entry || !entry->route || entry->type != kFunctionInlineHook) {
     ERROR_LOG("function %p is not prepared/hooked.", address);
-    return RS_FAILED;
+    return DobbyFailure(entry ? DOBBY_ERROR_CONFLICT : DOBBY_ERROR_NOT_FOUND);
   }
   FunctionInlineReplaceRouting *route = (FunctionInlineReplaceRouting *)entry->route;
   if (entry->is_committed) {
     // idempotent: already committed; succeed as a no-op
-    return RS_SUCCESS;
+    return DobbySuccess();
   }
 
   // code patch & hijack original control flow entry
-  route->Commit();
-  return RS_SUCCESS;
+  return route->Commit() ? RS_SUCCESS : RS_FAILED;
+}
+
+PUBLIC int DobbyPrepare(void *address, void *replacement, void **original) {
+  return Prepare(address, replacement, original, -1, 0);
+}
+PUBLIC int DobbyPrepareEx(void *address, void *replacement, void **original, const DobbyHookOptions *options) {
+  if (options && (options->struct_size < sizeof(*options) || options->api_version != DOBBY_API_VERSION ||
+                  options->near_policy < DOBBY_NEAR_AUTO || options->near_policy > DOBBY_NEAR_DISABLED))
+    return DobbyFailure(DOBBY_ERROR_INVALID_ARGUMENT);
+#if !defined(TARGET_ARCH_ARM64) || !defined(DOBBY_HAS_NEAR_BRANCH)
+  if (options && options->near_policy == DOBBY_NEAR_REQUIRED)
+    return DobbyFailure(DOBBY_ERROR_UNSUPPORTED_FORMAT);
+#endif
+  return Prepare(address, replacement, original, options ? options->near_policy : DOBBY_NEAR_AUTO,
+                 options ? options->max_patch_bytes : 0);
+}
+PUBLIC int DobbyHookEx(void *address, void *replacement, void **original, const DobbyHookOptions *options) {
+  HookOperationGuard operation;
+  if (DobbyPrepareEx(address, replacement, original, options) != RS_SUCCESS)
+    return RS_FAILED;
+  return DobbyCommit(address);
 }

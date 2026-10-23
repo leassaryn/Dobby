@@ -1,0 +1,59 @@
+name: Android Device Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      require_16k:
+        description: Require a real 16 KB page runtime
+        type: boolean
+        default: false
+      require_bti:
+        description: Require BTI hardware and guarded-page tests
+        type: boolean
+        default: false
+      require_pac:
+        description: Require pointer authentication hardware
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  device-tests:
+    # Dedicated runner with an attached authorized device, adb, CMake and ANDROID_NDK_HOME.
+    runs-on: [self-hosted, linux, android-device]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build test artifacts for supported Android ABIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            cmake -S . -B build/device/$abi \
+              -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI="$abi" -DANDROID_PLATFORM=android-30 -DANDROID_STL=c++_static \
+              -DCMAKE_BUILD_TYPE=Release -DDOBBY_GENERATE_SHARED=OFF -DDOBBY_BUILD_TESTS=ON
+            cmake --build build/device/$abi --parallel 4
+          done
+      - name: Run tests and record runtime evidence
+        shell: bash
+        env:
+          REQUIRE_16K: ${{ inputs.require_16k }}
+          REQUIRE_BTI: ${{ inputs.require_bti }}
+          REQUIRE_PAC: ${{ inputs.require_pac }}
+        run: |
+          args=()
+          [[ "$REQUIRE_16K" == true ]] && args+=(--require-16k)
+          [[ "$REQUIRE_BTI" == true ]] && args+=(--require-bti)
+          [[ "$REQUIRE_PAC" == true ]] && args+=(--require-pac)
+          if [[ "$REQUIRE_16K" == true || "$REQUIRE_BTI" == true || "$REQUIRE_PAC" == true ]]; then
+            args+=(--abi arm64-v8a)
+          fi
+          python3 scripts/run-android-tests.py --build-root build/device \
+            --output build/android-test-results.json "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Android-runtime-results
+          path: build/android-test-results.json
