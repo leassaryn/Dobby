@@ -1,5 +1,7 @@
 # Dobby for Android
 
+Current library version: **1.1.0** (struct API version: **1**).
+
 An Android-focused fork of [Dobby](https://github.com/jmpews/Dobby), a runtime
 hook framework for **arm64-v8a, armeabi-v7a, x86 and x86_64**. It builds a static
 library by default, with a shared-library option, using C++23/C23.

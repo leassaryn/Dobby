@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 include(cmake/EarlyGlobals.cmake)
 
-project(Dobby LANGUAGES C CXX ASM)
+project(Dobby VERSION 1.1.0 LANGUAGES C CXX ASM)
 
 # CMake >= 4.0 populates CMAKE_SYSTEM_NAME / CMAKE_SYSTEM_PROCESSOR only
 # during project(); re-run detection to pick up toolchain-file values.
@@ -296,6 +296,7 @@ set(dobby.HEADER_FILE_LIST
   )
 
 # add build version
+set(DOBBY_BUILD_VERSION "Dobby ${PROJECT_VERSION}")
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   execute_process(
     COMMAND git rev-parse --short --verify HEAD
@@ -304,10 +305,9 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   if(VERSION_COMMIT_HASH)
-    set(VERSION_REVISION "${VERSION_COMMIT_HASH}")
+    string(APPEND DOBBY_BUILD_VERSION "+${VERSION_COMMIT_HASH}")
   endif()
 endif()
-set(DOBBY_BUILD_VERSION "Dobby${VERSION_REVISION}")
 add_definitions(-D__DOBBY_BUILD_VERSION__="${DOBBY_BUILD_VERSION}")
 message(STATUS "[Dobby] ${DOBBY_BUILD_VERSION}")
 
